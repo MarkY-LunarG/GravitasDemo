@@ -9,8 +9,10 @@ import type { Vec3 } from './mat4.js';
 // The bind group index that each pipeline layout uses for the light.
 export const LIGHT_BIND_GROUP = 1;
 
-// Shader code that declares the light uniform and the applyLight() function.
+// Shader code that declares the light uniform and the functions that light a surface.
 // applyLight() gives the color of a surface with a world-space normal.
+// applyShadowedLight() also multiplies the sunlight by the fraction of the sun that the surface
+// can see, from 0 (in shadow) to 1 (in full sun). The ambient light is not changed.
 export const LIGHT_WGSL = /* wgsl */ `
 struct DirectionalLight {
   // The unit vector from a surface toward the light.
@@ -20,9 +22,13 @@ struct DirectionalLight {
 }
 @group(${LIGHT_BIND_GROUP}) @binding(0) var<uniform> light: DirectionalLight;
 
-fn applyLight(baseColor: vec3f, worldNormal: vec3f) -> vec3f {
+fn applyShadowedLight(baseColor: vec3f, worldNormal: vec3f, sunVisibility: f32) -> vec3f {
   let diffuse = max(dot(normalize(worldNormal), light.direction), 0.0);
-  return baseColor * (light.ambient + light.color * diffuse);
+  return baseColor * (light.ambient + light.color * diffuse * sunVisibility);
+}
+
+fn applyLight(baseColor: vec3f, worldNormal: vec3f) -> vec3f {
+  return applyShadowedLight(baseColor, worldNormal, 1.0);
 }
 `;
 

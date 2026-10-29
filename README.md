@@ -8,6 +8,12 @@ The camera does not move, but the hills and craters move toward it.
 The application uses [`@kmamal/gpu`](https://github.com/kmamal/gpu) for WebGPU through Google Dawn.
 It uses [`@kmamal/sdl`](https://github.com/kmamal/node-sdl) for the window and the keyboard.
 
+The application uses the prerelease versions `@kmamal/gpu` 1.0.0-6 and `@kmamal/sdl` 1.0.0-5
+(SDL3).
+In `@kmamal/gpu` 0.2.1, `GPUTexture.createView()` always fails, so a depth buffer is not possible.
+The two packages must have matching versions: `@kmamal/gpu` 1.0.0-6 cannot make a window surface
+for a window from `@kmamal/sdl` 0.11.
+
 ## Requirements
 
 - Node.js 24 or later.
@@ -82,6 +88,8 @@ The vertex shader calculates the height of each grid point from two parts:
   Each layer divides the plane into square cells, and each cell has one crater or no crater.
   The crater has a random position and a random radius in its cell.
   Thus the distance between craters changes.
+  The maximum radius must be no more than 0.25 of the cell size, because the shader looks only at
+  the 2 x 2 cells nearest to each point.
 
 The `_CRATER_` and `NOISE_` constants at the top of `src/terrain.ts` control these parts.
 The shader also calculates the slope of the height, and uses it for the normal.
@@ -105,11 +113,26 @@ The value `[-9000, 9000 * Math.SQRT2, -9000]` puts the sun in front of the camer
 The solid terrain uses diffuse (Lambert) lighting with an ambient term.
 The wireframe terrain does not use the light.
 
+The terrain also casts shadows.
+For each pixel, the fragment shader sends a ray toward the sun and samples the height field at
+`SHADOW_STEPS` points along the ray.
+Where the terrain is above the ray, the pixel gets only ambient light.
+Where the terrain is a short distance below the ray, the pixel is in the soft edge of a shadow.
+To save time, the rays use only the first `SHADOW_OCTAVES` octaves of the noise.
+The `SHADOW_` constants at the top of `src/terrain.ts` control the rays.
+The shadow rays are expensive, so the render pass has a depth buffer.
+With the depth test, the GPU does not run the fragment shader for most hidden terrain.
+
 To light a new object with the same sun:
 
-1. Add `LIGHT_WGSL` to the shader code, and call `applyLight()` in the fragment shader.
+1. Add `LIGHT_WGSL` to the shader code.
+   Call `applyLight()` in the fragment shader, or call `applyShadowedLight()` if the object
+   calculates its own shadows.
 2. Put `light.bindGroupLayout` at index `LIGHT_BIND_GROUP` in the pipeline layout.
-3. Call `light.bind(pass)` before the draw.
+3. Give the pipeline a `depthStencil` state with the format `DEPTH_FORMAT` from `src/main.ts`.
+4. Call `light.bind(pass)` before the draw.
+
+Other objects do not cast shadows on the terrain, and the terrain does not cast shadows on them.
 
 ## Known issues
 

@@ -23,6 +23,12 @@ const NEAR_PLANE = 1;
 // The far plane clips the terrain at 20 km. The far corner of the terrain is farther away.
 const FAR_PLANE = 20000;
 
+// The window surface format. The default format of @kmamal/gpu is rgba16float, which changes
+// the brightness of the colors, so request an 8-bit format with no sRGB encoding.
+const SURFACE_FORMAT = 'bgra8unorm';
+// All pipelines that draw in the main render pass must use this depth format.
+const DEPTH_FORMAT = 'depth24plus';
+
 // The speed at which the terrain features move toward the camera, in meters per second.
 const TERRAIN_SPEED = 1200;
 
@@ -74,10 +80,10 @@ async function main(): Promise<void> {
     console.error('WebGPU error:', (event as typeof gpu.GPUUncapturedErrorEvent).error.message);
   });
 
-  const renderer = gpu.renderGPUDeviceToWindow({ device, window });
+  const renderer = gpu.renderGPUDeviceToWindow({ device, window, format: SURFACE_FORMAT });
 
   // The pipelines must use the same format as the window surface.
-  const surfaceFormat = renderer.getCurrentTexture().format;
+  const surfaceFormat = renderer.getPreferredFormat();
 
   // All objects in the scene use this one light.
   const sun = new DirectionalLight(
@@ -86,7 +92,18 @@ async function main(): Promise<void> {
     SUN_COLOR,
     AMBIENT_COLOR,
   );
-  const terrain = new Terrain(device, surfaceFormat, sun);
+  const terrain = new Terrain(device, surfaceFormat, DEPTH_FORMAT, sun);
+
+  // The depth texture must have the same size as the window surface.
+  const createDepthTexture = () => {
+    const surface = renderer.getCurrentTexture();
+    return device.createTexture({
+      size: [surface.width, surface.height],
+      format: DEPTH_FORMAT,
+      usage: gpu.GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+  };
+  let depthTexture = createDepthTexture();
 
   const updateCamera = (): void => {
     terrain.setViewProjection(computeViewProjection(window.pixelWidth / window.pixelHeight));
@@ -103,6 +120,12 @@ async function main(): Promise<void> {
           storeOp: 'store',
         },
       ],
+      depthStencilAttachment: {
+        view: depthTexture.createView(),
+        depthClearValue: 1.0,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'discard',
+      },
     });
     terrain.draw(pass);
     pass.end();
@@ -112,6 +135,8 @@ async function main(): Promise<void> {
 
   window.on('resize', () => {
     renderer.resize();
+    depthTexture.destroy();
+    depthTexture = createDepthTexture();
     updateCamera();
   });
 
@@ -128,7 +153,6 @@ async function main(): Promise<void> {
 
   window.on('close', () => {
     device.destroy();
-    gpu.destroy(instance);
     // Exit now. If Node.js releases the Dawn objects in its normal shutdown,
     // Dawn fails a RefCounted assertion and the process crashes.
     process.exit(0);

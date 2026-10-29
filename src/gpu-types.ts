@@ -11,3 +11,4 @@ type CommandEncoder = ReturnType<Device['createCommandEncoder']>;
 export type Device = Awaited<ReturnType<Adapter['requestDevice']>>;
 export type RenderPassEncoder = ReturnType<CommandEncoder['beginRenderPass']>;
 export type TextureFormat = ReturnType<Instance['getPreferredCanvasFormat']>;
+export type DepthFormat = NonNullable<Parameters<Device['createRenderPipeline']>[0]['depthStencil']>['format'];

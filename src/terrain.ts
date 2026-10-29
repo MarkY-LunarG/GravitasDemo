@@ -4,7 +4,7 @@
 // the vertex shader samples the height field, so the terrain features move across the grid.
 
 import gpu from '@kmamal/gpu';
-import type { Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
+import type { DepthFormat, Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
 import { type DirectionalLight, LIGHT_WGSL } from './light.js';
 import { type Mat4, type Vec3, multiply, translationScale } from './mat4.js';
 
@@ -19,6 +19,10 @@ const HALF_EXTENT = TERRAIN_EXTENT / 2;
 const CELLS_PER_ROW = GRID_POINTS - 1;
 // The solid terrain is one triangle strip for each row of cells. Each strip has two vertices
 // for each grid point in the row. Thus the vertex shader runs only twice for each grid point.
+//
+// The depth test gives the correct result in all draw orders. The rows draw from the camera
+// corner (-X -Z) outward, so near terrain usually draws first. Then the GPU can skip the
+// fragment shader (and its shadow ray) for far terrain that near terrain hides.
 const STRIP_VERTEX_COUNT = GRID_POINTS * 2;
 // Each grid line along X and along Z is made of CELLS_PER_ROW segments of two vertices.
 const WIRE_VERTEX_COUNT = 2 * GRID_POINTS * CELLS_PER_ROW * 2;
@@ -32,14 +36,30 @@ const NOISE_OCTAVES = 6;
 // The craters are in two layers: large craters that are far apart, and small craters that are
 // near each other. Each layer divides the plane into square cells. A cell has one crater or no
 // crater, and the crater has a random position and radius in the cell. Thus the distance between
-// craters is not constant. The maximum radius must be no more than 0.5 of the cell size,
-// because the shader looks only at the cell of the point and the 8 cells around it.
+// craters is not constant. A crater has an effect to 2 * radius from its center. The maximum
+// radius must be no more than 0.25 of the cell size, because the shader looks only at the
+// 2 x 2 cells nearest to the point.
 const LARGE_CRATER_CELL = 8000;
 const LARGE_CRATER_PROBABILITY = 0.1;
 const LARGE_CRATER_RADIUS = [250, 1500] as const;
 const SMALL_CRATER_CELL = 800;
 const SMALL_CRATER_PROBABILITY = 0.35;
 const SMALL_CRATER_RADIUS = [30, 140] as const;
+
+// Cast shadows. The fragment shader sends a ray from the surface toward the sun, and
+// samples the height field at steps along the ray. Each step is SHADOW_STEP_GROWTH times
+// longer than the step before it, so near steps are short and far steps are long.
+// SHADOW_SOFTNESS sets the width of the soft edge: larger values give sharper shadows.
+// The shadow rays use only the first SHADOW_OCTAVES of the noise, because the small octaves
+// cost much time and have almost no effect on the shadows.
+const SHADOW_STEPS = 18;
+const SHADOW_FIRST_STEP = 4;
+const SHADOW_STEP_GROWTH = 1.35;
+const SHADOW_SOFTNESS = 16;
+const SHADOW_OCTAVES = 3;
+// The ray stops when it is higher than all terrain. This is an approximate upper limit:
+// the noise is at most 2 * NOISE_AMPLITUDE and a crater rim is at most 0.06 * radius.
+const MAX_TERRAIN_HEIGHT = 2 * NOISE_AMPLITUDE + 0.06 * LARGE_CRATER_RADIUS[1];
 
 // The vertex shaders make the grid positions from the vertex index, so no vertex or
 // index buffers are necessary. Grid coordinates are in [0, 1] and the model matrix
@@ -52,6 +72,12 @@ const TERRAIN_EXTENT: f32 = ${TERRAIN_EXTENT}.0;
 const NOISE_FREQUENCY: f32 = ${1 / NOISE_WAVELENGTH};
 const NOISE_AMPLITUDE: f32 = ${NOISE_AMPLITUDE}.0;
 const NOISE_OCTAVES: u32 = ${NOISE_OCTAVES}u;
+const SHADOW_STEPS: u32 = ${SHADOW_STEPS}u;
+const SHADOW_OCTAVES: u32 = ${SHADOW_OCTAVES}u;
+const SHADOW_FIRST_STEP: f32 = ${SHADOW_FIRST_STEP}.0;
+const SHADOW_STEP_GROWTH: f32 = ${SHADOW_STEP_GROWTH};
+const SHADOW_SOFTNESS: f32 = ${SHADOW_SOFTNESS}.0;
+const MAX_TERRAIN_HEIGHT: f32 = ${MAX_TERRAIN_HEIGHT};
 
 struct Uniforms {
   mvp: mat4x4f,
@@ -63,6 +89,8 @@ struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) worldNormal: vec3f,
   @location(1) height: f32,
+  // The position in the height field, which includes worldPos.
+  @location(2) sampleXZ: vec2f,
 }
 
 // An integer hash of a cell and a seed. Different seeds give values that are not related.
@@ -74,11 +102,6 @@ fn hash(cell: vec2i, seed: u32) -> u32 {
   h *= 0x846ca68bu;
   h ^= h >> 16u;
   return h;
-}
-
-// A random number in [0, 1).
-fn random(cell: vec2i, seed: u32) -> f32 {
-  return f32(hash(cell, seed) >> 8u) / 16777216.0;
 }
 
 // A random gradient with components in [-1, 1]. The two halves of the hash give the
@@ -114,11 +137,11 @@ fn perlin(p: vec2f, seed: u32) -> vec3f {
   return vec3f(value, gradient);
 }
 
-fn hills(p: vec2f) -> vec3f {
+fn hills(p: vec2f, octaves: u32) -> vec3f {
   var sum = vec3f(0.0);
   var frequency = NOISE_FREQUENCY;
   var amplitude = NOISE_AMPLITUDE;
-  for (var octave = 0u; octave < NOISE_OCTAVES; octave++) {
+  for (var octave = 0u; octave < octaves; octave++) {
     let n = perlin(p * frequency, octave);
     sum += vec3f(n.x * amplitude, n.yz * amplitude * frequency);
     frequency *= 2.0;
@@ -153,24 +176,29 @@ fn crater(p: vec2f, center: vec2f, radius: f32) -> vec3f {
 
 fn craterLayer(p: vec2f, cellSize: f32, probability: f32, minRadius: f32, maxRadius: f32,
                seed: u32) -> vec3f {
-  let home = vec2i(floor(p / cellSize));
+  // The 2 x 2 block of cells whose centers are nearest to p.
+  let first = vec2i(floor(p / cellSize - 0.5));
   var sum = vec3f(0.0);
-  for (var dz = -1; dz <= 1; dz++) {
-    for (var dx = -1; dx <= 1; dx++) {
-      let cell = home + vec2i(dx, dz);
-      if (random(cell, seed) >= probability) {
+  for (var dz = 0; dz <= 1; dz++) {
+    for (var dx = 0; dx <= 1; dx++) {
+      let cell = first + vec2i(dx, dz);
+      // One hash gives four random values of 8 bits: the chance of a crater, the radius,
+      // and the position of the center in the cell.
+      let h = hash(cell, seed);
+      let values = vec4f(vec4u(h, h >> 8u, h >> 16u, h >> 24u) & vec4u(0xffu)) / 256.0;
+      if (values.x >= probability) {
         continue;
       }
-      let radius = mix(minRadius, maxRadius, random(cell, seed + 1u));
-      let center = (vec2f(cell) + vec2f(random(cell, seed + 2u), random(cell, seed + 3u))) * cellSize;
+      let radius = mix(minRadius, maxRadius, values.y);
+      let center = (vec2f(cell) + values.zw) * cellSize;
       sum += crater(p, center, radius);
     }
   }
   return sum;
 }
 
-fn terrainHeight(p: vec2f) -> vec3f {
-  return hills(p)
+fn terrainHeight(p: vec2f, octaves: u32) -> vec3f {
+  return hills(p, octaves)
     + craterLayer(p, ${LARGE_CRATER_CELL}.0, ${LARGE_CRATER_PROBABILITY}, ${LARGE_CRATER_RADIUS[0]}.0,
                   ${LARGE_CRATER_RADIUS[1]}.0, 100u)
     + craterLayer(p, ${SMALL_CRATER_CELL}.0, ${SMALL_CRATER_PROBABILITY}, ${SMALL_CRATER_RADIUS[0]}.0,
@@ -182,11 +210,13 @@ fn makeVertex(column: u32, row: u32) -> VertexOutput {
   // The model matrix maps grid coordinates to world X and Z, and it does not scale Y.
   // Thus the height and the normal can stay in meters in world space.
   let gridWorld = (gridCoord - 0.5) * TERRAIN_EXTENT;
-  let terrain = terrainHeight(gridWorld + uniforms.worldPos.xz);
+  let sampleXZ = gridWorld + uniforms.worldPos.xz;
+  let terrain = terrainHeight(sampleXZ, NOISE_OCTAVES);
   var output: VertexOutput;
   output.position = uniforms.mvp * vec4f(gridCoord.x, terrain.x, gridCoord.y, 1.0);
   output.worldNormal = normalize(vec3f(-terrain.y, 1.0, -terrain.z));
   output.height = terrain.x;
+  output.sampleXZ = sampleXZ;
   return output;
 }
 
@@ -211,11 +241,41 @@ fn vs_wire(@builtin(vertex_index) index: u32) -> VertexOutput {
   return makeVertex(segment / CELLS_PER_ROW, segment % CELLS_PER_ROW + end);
 }
 
+// The fraction of the sun that a surface point can see, from 0 to 1.
+// Where the terrain is above the ray toward the sun, the point is in shadow. Where the terrain is
+// a short distance below the ray, the point is in the soft edge of a shadow.
+fn sunVisibility(sampleXZ: vec2f) -> f32 {
+  // The ray starts on the same simplified surface that it tests against. A small offset above
+  // that surface prevents the surface from shadowing itself.
+  let startHeight = terrainHeight(sampleXZ, SHADOW_OCTAVES).x;
+  let origin = vec3f(sampleXZ.x, startHeight + 0.5, sampleXZ.y);
+  var visibility = 1.0;
+  var t = SHADOW_FIRST_STEP;
+  for (var i = 0u; i < SHADOW_STEPS; i++) {
+    let ray = origin + light.direction * t;
+    if (ray.y > MAX_TERRAIN_HEIGHT) {
+      break;
+    }
+    let clearance = ray.y - terrainHeight(ray.xz, SHADOW_OCTAVES).x;
+    visibility = min(visibility, SHADOW_SOFTNESS * clearance / t);
+    if (visibility <= 0.0) {
+      return 0.0;
+    }
+    t *= SHADOW_STEP_GROWTH;
+  }
+  return visibility;
+}
+
 @fragment
 fn fs_solid(input: VertexOutput) -> @location(0) vec4f {
   // Low ground is darker than high ground.
   let shade = mix(0.3, 0.55, saturate(input.height / 400.0 + 0.5));
-  return vec4f(applyLight(vec3f(shade, shade, shade), input.worldNormal), 1.0);
+  // A surface that faces away from the sun gets only ambient light, so it needs no shadow ray.
+  var visibility = 0.0;
+  if (dot(input.worldNormal, light.direction) > 0.0) {
+    visibility = sunVisibility(input.sampleXZ);
+  }
+  return vec4f(applyShadowedLight(vec3f(shade, shade, shade), input.worldNormal, visibility), 1.0);
 }
 
 @fragment
@@ -235,7 +295,7 @@ export class Terrain {
   private worldPosition: Vec3;
   private mode: TerrainRenderMode = 'solid';
 
-  constructor(device: Device, format: TextureFormat, light: DirectionalLight) {
+  constructor(device: Device, format: TextureFormat, depthFormat: DepthFormat, light: DirectionalLight) {
     this.device = device;
     this.light = light;
     this.modelMatrix = translationScale([-HALF_EXTENT, 0, -HALF_EXTENT], [TERRAIN_EXTENT, 1, TERRAIN_EXTENT]);
@@ -257,17 +317,20 @@ export class Terrain {
     });
 
     const shaderModule = device.createShaderModule({ code: SHADER });
+    const depthStencil = { format: depthFormat, depthWriteEnabled: true, depthCompare: 'less' } as const;
     this.solidPipeline = device.createRenderPipeline({
       layout: pipelineLayout,
       vertex: { module: shaderModule, entryPoint: 'vs_solid' },
       fragment: { module: shaderModule, entryPoint: 'fs_solid', targets: [{ format }] },
       primitive: { topology: 'triangle-strip' },
+      depthStencil,
     });
     this.wirePipeline = device.createRenderPipeline({
       layout: pipelineLayout,
       vertex: { module: shaderModule, entryPoint: 'vs_wire' },
       fragment: { module: shaderModule, entryPoint: 'fs_wire', targets: [{ format }] },
       primitive: { topology: 'line-list' },
+      depthStencil,
     });
   }
 
