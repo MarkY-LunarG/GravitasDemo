@@ -1,5 +1,5 @@
-// A flat 1 km x 1 km ground grid of 5000 x 5000 points that draws as a solid surface or as
-// a wireframe. All world units are meters. The grid is on the Y = 0 plane, centered on the origin.
+// A flat square ground grid that draws as a solid surface or as a wireframe.
+// All world units are meters. The grid is on the Y = 0 plane, centered on the origin.
 
 import gpu from '@kmamal/gpu';
 import type { Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';

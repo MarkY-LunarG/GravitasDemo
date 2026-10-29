@@ -1,5 +1,5 @@
-// Render a flat 1 km x 1 km terrain grid with WebGPU in an SDL window.
-// The camera is 50 m above one corner and looks toward a point 50 m above the center of the grid.
+// Render a flat terrain grid with WebGPU in an SDL window.
+// The camera is above one corner and looks toward the center of the grid.
 // Press W to toggle between the solid and the wireframe terrain. Press ESC to exit.
 
 import gpu from '@kmamal/gpu';
