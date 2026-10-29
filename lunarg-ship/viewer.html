@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LunarG Ship Viewer</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #05070d; color: #dde3ee; font: 14px system-ui, sans-serif; overflow: hidden; }
+  #ui { position: fixed; top: 12px; left: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button { background: #1b2232; color: #dde3ee; border: 1px solid #3a4560; border-radius: 6px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  button:hover { background: #26304a; }
+  #status { opacity: 0.8; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.webgpu.js",
+    "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.webgpu.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="ui">
+  <button id="ignite">Ignite</button>
+  <button id="shutdown">Shutdown</button>
+  <span id="status">Loading…</span>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { pass } from 'three/tsl';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const MODEL_URL = new URLSearchParams(location.search).get('model') ?? 'lunarg_ship.glb';
+const status = document.getElementById('status');
+
+const renderer = new THREE.WebGPURenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+await renderer.init();
+const backend = renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGL2 fallback';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070d);
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.5, 2000);
+camera.position.set(75, 40, -70);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 23, -6);
+controls.enableDamping = true;
+
+scene.add(new THREE.HemisphereLight(0xb8c8ff, 0x202018, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(60, 90, 40);
+scene.add(sun);
+const rim = new THREE.DirectionalLight(0x8899ff, 1.2);
+rim.position.set(-50, 20, -80);
+scene.add(rim);
+
+// Bloom makes the unlit flame colors glow.
+const postProcessing = new THREE.PostProcessing(renderer);
+const scenePass = pass(scene, camera);
+const sceneColor = scenePass.getTextureNode('output');
+postProcessing.outputNode = sceneColor.add(bloom(sceneColor, 0.7, 0.3, 1.1));
+
+const gltf = await new GLTFLoader().loadAsync(MODEL_URL);
+const ship = gltf.scene;
+scene.add(ship);
+
+// Flame shells use additive blending and HDR color for a hot look.
+ship.traverse((o) => {
+  if (!o.isMesh || !o.material.name.startsWith('Flame_')) return;
+  o.material.color.setScalar(o.material.name === 'Flame_ThroatGlow' ? 4 : 3);
+  if (o.material.transparent) {
+    o.material.blending = THREE.AdditiveBlending;
+    o.material.depthWrite = false;
+  }
+  o.renderOrder = 10;
+});
+
+// One point light per engine. Its strength follows the flame root scale.
+const flameRoots = ['EngineL_Flames', 'EngineR_Flames'].map((n) => ship.getObjectByName(n));
+const engineLights = flameRoots.map((root) => {
+  const light = new THREE.PointLight(0xff9a40, 0, 60, 1.5);
+  light.position.set(0, 0, -2.5);
+  root.parent.add(light);
+  return light;
+});
+
+const mixer = new THREE.AnimationMixer(ship);
+const clip = (name) => THREE.AnimationClip.findByName(gltf.animations, name);
+const ignite = mixer.clipAction(clip('EnginesIgnite'));
+const running = mixer.clipAction(clip('EnginesRunning'));
+const shutdown = mixer.clipAction(clip('EnginesShutdown'));
+for (const a of [ignite, shutdown]) { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
+running.setLoop(THREE.LoopRepeat, Infinity);
+
+let lit = false;
+function lightEngines() {
+  if (lit) return;
+  lit = true;
+  shutdown.stop();
+  ignite.reset().play();
+  running.reset().play();
+  status.textContent = `${backend} · engines lit`;
+}
+function stopEngines() {
+  if (!lit) return;
+  lit = false;
+  ignite.stop();
+  shutdown.reset().play();
+  status.textContent = `${backend} · engines off`;
+}
+mixer.addEventListener('finished', (e) => { if (e.action === shutdown) running.stop(); });
+
+document.getElementById('ignite').onclick = lightEngines;
+document.getElementById('shutdown').onclick = stopEngines;
+addEventListener('keydown', (e) => { if (e.code === 'Space') (lit ? stopEngines : lightEngines)(); });
+status.textContent = `${backend} · engines off (Space toggles)`;
+if (new URLSearchParams(location.search).has('ignite')) lightEngines();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const timer = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = timer.getDelta();
+  mixer.update(dt);
+  const t = timer.elapsedTime;
+  engineLights.forEach((light, i) => {
+    const s = flameRoots[i].scale.x;
+    light.intensity = s < 0.01 ? 0 : 900 * s * (0.85 + 0.15 * Math.sin(t * 37 + i * 2.1) * Math.sin(t * 23 + i));
+  });
+  controls.update();
+  postProcessing.render();
+});
+</script>
+</body>
+</html>

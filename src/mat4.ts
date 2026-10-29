@@ -2,6 +2,8 @@
 // The coordinate system is right-handed with +Y up, and clip-space depth is [0, 1] as in WebGPU.
 
 export type Vec3 = readonly [number, number, number];
+// A unit quaternion [x, y, z, w], as glTF stores rotations.
+export type Quat = readonly [number, number, number, number];
 export type Mat4 = Float32Array;
 
 function subtract(a: Vec3, b: Vec3): Vec3 {
@@ -43,6 +45,27 @@ export function translationScale(translation: Vec3, scale: Vec3): Mat4 {
     0, 0, scale[2], 0,
     translation[0], translation[1], translation[2], 1,
   ]);
+}
+
+// The matrix that scales, then rotates, then translates, as for a glTF node.
+export function compose(translation: Vec3, rotation: Quat, scale: Vec3): Mat4 {
+  const [x, y, z, w] = rotation;
+  const [sx, sy, sz] = scale;
+  // prettier-ignore
+  return new Float32Array([
+    (1 - 2 * (y * y + z * z)) * sx, 2 * (x * y + w * z) * sx, 2 * (x * z - w * y) * sx, 0,
+    2 * (x * y - w * z) * sy, (1 - 2 * (x * x + z * z)) * sy, 2 * (y * z + w * x) * sy, 0,
+    2 * (x * z + w * y) * sz, 2 * (y * z - w * x) * sz, (1 - 2 * (x * x + y * y)) * sz, 0,
+    translation[0], translation[1], translation[2], 1,
+  ]);
+}
+
+export function transformPoint(m: Mat4, p: Vec3): Vec3 {
+  return [
+    m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+    m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+    m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
+  ];
 }
 
 export function perspective(fovYRadians: number, aspect: number, near: number, far: number): Mat4 {

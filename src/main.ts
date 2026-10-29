@@ -1,12 +1,17 @@
 // Render a terrain grid with WebGPU in an SDL window.
 // The camera stays above one corner and looks toward the center of the grid.
 // The terrain features move toward the camera.
-// Press W to toggle between the solid and the wireframe terrain. Press ESC to exit.
+// The LunarG ship is in the center of the view and faces away from the camera.
+// Hold Space to run the ship engines. Press W to toggle between the solid and the wireframe
+// terrain. Press ESC to exit.
 
+import { fileURLToPath } from 'node:url';
 import gpu from '@kmamal/gpu';
 import sdl from '@kmamal/sdl';
+import { loadGlb } from './gltf.js';
 import { DirectionalLight } from './light.js';
-import { lookAt, multiply, perspective, viewToWorldDirection } from './mat4.js';
+import { compose, lookAt, multiply, perspective, transformPoint, viewToWorldDirection } from './mat4.js';
+import { Ship } from './ship.js';
 import { TERRAIN_EXTENT, Terrain } from './terrain.js';
 
 const WIDTH = 1920;
@@ -44,15 +49,43 @@ const SUN_VIEW_POSITION = [-9000, 9000 * Math.SQRT2, -9000] as const;
 const SUN_COLOR = [1.0, 1.0, 1.0] as const;
 const AMBIENT_COLOR = [0.0, 0.0, 0.0] as const;
 
+// The path is relative to this file, so it is correct from src/ (tsx) and from dist/ (tsc).
+const SHIP_MODEL_PATH = fileURLToPath(new URL('../lunarg-ship/lunarg_ship.glb', import.meta.url));
+// The distance from the camera to the center of the ship, along the center of the view.
+// The ship is 50 m tall, so at 250 m it fills approximately one quarter of the window height.
+const SHIP_DISTANCE = 250;
+
 const EYE = [CAMERA_CORNER, EYE_HEIGHT, CAMERA_CORNER] as const;
 // The horizontal unit vector from the camera toward the center of the terrain.
 const HEADING = [-EYE[0] / Math.hypot(EYE[0], EYE[2]), 0, -EYE[2] / Math.hypot(EYE[0], EYE[2])] as const;
 
-// The camera heading is toward the center of the terrain. The pitch tilts it up or down.
+// The unit vector along the center of the view. The heading is toward the center of the terrain,
+// and the pitch tilts it up or down.
+function viewDirection(pitch: number): readonly [number, number, number] {
+  return [HEADING[0] * Math.cos(pitch), Math.sin(pitch), HEADING[2] * Math.cos(pitch)];
+}
+
 function computeView(pitch: number): Float32Array {
   const eye = EYE;
-  const forward = [HEADING[0] * Math.cos(pitch), Math.sin(pitch), HEADING[2] * Math.cos(pitch)] as const;
+  const forward = viewDirection(pitch);
   return lookAt(eye, [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]], [0, 1, 0]);
+}
+
+// Put the center of the ship on the center of the view, SHIP_DISTANCE from the camera.
+// The ship stays level, and its front (+Z) points along the camera heading.
+function placeShip(ship: Ship): void {
+  const yaw = Math.atan2(HEADING[0], HEADING[2]);
+  const rotation = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)] as const;
+  const rotatedCenter = transformPoint(compose([0, 0, 0], rotation, [1, 1, 1]), ship.center);
+  const forward = viewDirection(CAMERA_PITCH);
+  ship.setPlacement(
+    [
+      EYE[0] + forward[0] * SHIP_DISTANCE - rotatedCenter[0],
+      EYE[1] + forward[1] * SHIP_DISTANCE - rotatedCenter[1],
+      EYE[2] + forward[2] * SHIP_DISTANCE - rotatedCenter[2],
+    ],
+    rotation,
+  );
 }
 
 function computeViewProjection(aspect: number): Float32Array {
@@ -93,6 +126,8 @@ async function main(): Promise<void> {
     AMBIENT_COLOR,
   );
   const terrain = new Terrain(device, surfaceFormat, DEPTH_FORMAT, sun);
+  const ship = new Ship(device, surfaceFormat, DEPTH_FORMAT, sun, loadGlb(SHIP_MODEL_PATH));
+  placeShip(ship);
 
   // The depth texture must have the same size as the window surface.
   const createDepthTexture = () => {
@@ -106,7 +141,9 @@ async function main(): Promise<void> {
   let depthTexture = createDepthTexture();
 
   const updateCamera = (): void => {
-    terrain.setViewProjection(computeViewProjection(window.pixelWidth / window.pixelHeight));
+    const viewProjection = computeViewProjection(window.pixelWidth / window.pixelHeight);
+    terrain.setViewProjection(viewProjection);
+    ship.setViewProjection(viewProjection);
   };
 
   const render = (): void => {
@@ -128,6 +165,7 @@ async function main(): Promise<void> {
       },
     });
     terrain.draw(pass);
+    ship.draw(pass);
     pass.end();
     device.queue.submit([encoder.finish()]);
     renderer.swap();
@@ -148,7 +186,20 @@ async function main(): Promise<void> {
       window.destroy();
     } else if (event.key === 'w') {
       terrain.setRenderMode(terrain.renderMode === 'solid' ? 'wireframe' : 'solid');
+    } else if (event.key === ' ') {
+      ship.setEnginesOn(true);
     }
+  });
+
+  // The engines run only while Space is held down.
+  window.on('keyUp', (event) => {
+    if (event.key === ' ') {
+      ship.setEnginesOn(false);
+    }
+  });
+  // The window does not get the key release if it is not in focus, so stop the engines.
+  window.on('blur', () => {
+    ship.setEnginesOn(false);
   });
 
   window.on('close', () => {
@@ -166,11 +217,12 @@ async function main(): Promise<void> {
   let previousTime = performance.now();
   while (!window.destroyed) {
     const now = performance.now();
-    const distance = (TERRAIN_SPEED * (now - previousTime)) / 1000;
+    const seconds = (now - previousTime) / 1000;
     previousTime = now;
-    worldPos[0] += HEADING[0] * distance;
-    worldPos[2] += HEADING[2] * distance;
+    worldPos[0] += HEADING[0] * TERRAIN_SPEED * seconds;
+    worldPos[2] += HEADING[2] * TERRAIN_SPEED * seconds;
     terrain.update([worldPos[0], worldPos[1], worldPos[2]]);
+    ship.update(seconds);
     render();
     // Let Node.js process the window events between frames.
     await new Promise((resolve) => setImmediate(resolve));

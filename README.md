@@ -4,6 +4,8 @@ This application renders a terrain grid with WebGPU in Node.js.
 It shows the grid in an SDL window.
 The camera is above one corner of the grid, faces the center, and tilts down.
 The camera does not move, but the hills and craters move toward it.
+The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
+the camera.
 
 The application uses [`@kmamal/gpu`](https://github.com/kmamal/gpu) for WebGPU through Google Dawn.
 It uses [`@kmamal/sdl`](https://github.com/kmamal/node-sdl) for the window and the keyboard.
@@ -58,6 +60,7 @@ npm run typecheck
 | ----- | ----------------------------------------------- |
 | `W`   | Toggle between the solid and wireframe terrain. |
 | `Esc` | Exit the application.                           |
+| Space | Hold to run the ship engines.                   |
 
 The window close button also exits the application.
 
@@ -70,6 +73,8 @@ The window close button also exits the application.
 | `src/light.ts`       | The directional light that all objects share, and its WGSL code.      |
 | `src/mat4.ts`        | 4x4 matrix functions for the model, view, and projection matrices.    |
 | `src/gpu-types.ts`   | WebGPU type names from the `@kmamal/gpu` typings.                     |
+| `src/gltf.ts`        | A minimal binary glTF (.glb) loader and an animation sampler.         |
+| `src/ship.ts`        | The ship: pipelines, the engine animations, and the engine state.     |
 
 To change the camera position, the camera pitch (`CAMERA_PITCH`), or the field of view, edit the
 constants at the top of `src/main.ts`.
@@ -133,6 +138,35 @@ To light a new object with the same sun:
 4. Call `light.bind(pass)` before the draw.
 
 Other objects do not cast shadows on the terrain, and the terrain does not cast shadows on them.
+
+## Ship
+
+`src/main.ts` loads `lunarg-ship/lunarg_ship.glb` at startup.
+The ship is `SHIP_DISTANCE` meters from the camera, on the center of the view.
+The ship stays level, and its front (+Z in the model) points along the camera heading.
+Thus the camera sees the engines at the back of the ship.
+
+The engines run only while you hold Space:
+
+1. When you press Space, the `EnginesIgnite` animation plays once and the `EnginesRunning`
+   animation loops.
+2. When you release Space, the `EnginesShutdown` animation plays.
+   When it is complete, `EnginesRunning` stops.
+
+If you release Space during the ignition, the shutdown starts at the current flame size.
+If you press Space during the shutdown, the ignition starts at the current flame size.
+Thus the flames do not jump.
+The engines also stop when the window is not in focus, because the window does not get the key
+release.
+
+The solid parts of the ship use the sun with `applyLight()`.
+They do not get shadows from the terrain, and they do not cast shadows on the terrain.
+The flames are unlit.
+They use their vertex colors with additive blending, as `lunarg-ship/viewer.html` does.
+This renderer has no bloom and no engine lights, so the flames do not glow on other surfaces.
+
+`src/gltf.ts` supports only the glTF features that the ship uses.
+It throws an error for other features, for example textures, skins, or STEP interpolation.
 
 ## Known issues
 
