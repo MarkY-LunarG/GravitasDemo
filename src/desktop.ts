@@ -1,7 +1,6 @@
 // The desktop target: show the scene (src/app.ts) in an SDL window with WebGPU through Google
 // Dawn (@kmamal/gpu) in Node.js.
-// Hold Space to run the ship engines. Press W to toggle between the solid and the wireframe
-// terrain. Press ESC to exit.
+// Press W to toggle between the solid and the wireframe terrain. Press ESC to exit.
 
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -71,20 +70,7 @@ async function main(): Promise<void> {
       window.destroy();
     } else if (event.key === 'w') {
       app.toggleTerrainRenderMode();
-    } else if (event.key === ' ') {
-      app.setEnginesOn(true);
     }
-  });
-
-  // The engines run only while Space is held down.
-  window.on('keyUp', (event) => {
-    if (event.key === ' ') {
-      app.setEnginesOn(false);
-    }
-  });
-  // The window does not get the key release if it is not in focus, so stop the engines.
-  window.on('blur', () => {
-    app.setEnginesOn(false);
   });
 
   window.on('close', () => {

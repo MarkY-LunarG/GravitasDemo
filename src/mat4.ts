@@ -103,3 +103,18 @@ export function lookAt(eye: Vec3, target: Vec3, up: Vec3): Mat4 {
     -dot(xAxis, eye), -dot(yAxis, eye), -dot(zAxis, eye), 1,
   ]);
 }
+
+// The six planes of the view volume of a view-projection matrix, as [a, b, c, d] with a unit
+// normal (a, b, c) that points into the volume. A point p is inside a plane when
+// a * p.x + b * p.y + c * p.z + d >= 0. The clip-space depth is [0, 1], as in WebGPU.
+// The order is left, right, bottom, top, near, far.
+export function frustumPlanes(m: Mat4): [number, number, number, number][] {
+  const row = (i: number) => [m[i], m[4 + i], m[8 + i], m[12 + i]];
+  const [r0, r1, r2, r3] = [row(0), row(1), row(2), row(3)];
+  const add = (a: number[], b: number[], sign: number) => a.map((value, i) => value + sign * b[i]);
+  const planes = [add(r3, r0, 1), add(r3, r0, -1), add(r3, r1, 1), add(r3, r1, -1), r2, add(r3, r2, -1)];
+  return planes.map((plane) => {
+    const length = Math.hypot(plane[0], plane[1], plane[2]);
+    return [plane[0] / length, plane[1] / length, plane[2] / length, plane[3] / length];
+  });
+}

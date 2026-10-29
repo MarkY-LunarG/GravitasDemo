@@ -9,6 +9,8 @@ It has two targets that share the same rendering code:
 The camera is 500 m above the ground and tilts down.
 The hills and craters move toward the ship, but the ship does not move.
 The camera moves around the ship on a path that repeats every 20 seconds.
+The application is a benchmark with a sequence of scenes.
+After 40 seconds, the terrain goes away, and the ship flies through a field of asteroids.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
 
@@ -82,7 +84,6 @@ npm run typecheck
 | ----- | ----------------------------------------------- |
 | `W`   | Toggle between the solid and wireframe terrain. |
 | `Esc` | Exit the application (desktop only).            |
-| Space | Hold to run the ship engines.                   |
 
 The window close button also exits the desktop application.
 
@@ -90,7 +91,13 @@ The window close button also exits the desktop application.
 
 | File                 | Contents                                                              |
 | -------------------- | --------------------------------------------------------------------- |
-| `src/app.ts`         | The shared scene: camera, camera path, sun, ship placement, and frames. |
+| `src/app.ts`         | The shared scenes: scene list, camera path, sun, ship placement, and frames. |
+| `src/fade.ts`        | The fade to black between scenes.                                     |
+| `src/asteroids.ts`   | The asteroids: shape, update, and cull compute shaders, and indirect draws. |
+| `src/scenes/scene.ts` | The `Scene` interface, and the shared objects that scenes can use.   |
+| `src/scenes/index.ts` | The list of scenes, in the order that they play.                     |
+| `src/scenes/terrain-scene.ts` | Scene 1: the terrain and the ship.                           |
+| `src/scenes/asteroid-scene.ts` | Scene 2: the asteroids and the ship.                        |
 | `src/desktop.ts`     | Desktop target: SDL window, Dawn device, keys, and the frame loop.    |
 | `src/browser.ts`     | Browser target: canvas, browser WebGPU device, keys, and frames.      |
 | `index.html`         | The browser page. Vite uses it as the entry point.                    |
@@ -143,8 +150,8 @@ Without this, the small features would flicker as the terrain moves.
 The grid does not move.
 `Terrain.update()` sets `worldPos`, an offset that the shader adds to each grid point before it
 samples the height field.
-Each frame, `src/app.ts` moves `worldPos` along the camera heading at `TERRAIN_SPEED` meters
-per second.
+Each frame, the terrain scene (`src/scenes/terrain-scene.ts`) moves `worldPos` along the camera
+heading at `TERRAIN_SPEED` meters per second.
 Thus the terrain features come toward the camera.
 
 ## Lighting
@@ -178,6 +185,64 @@ To light a new object with the same sun:
 
 Other objects do not cast shadows on the terrain, and the terrain does not cast shadows on them.
 
+## Benchmark scenes
+
+Each scene is in its own file in `src/scenes/`, and `SCENES` in `src/scenes/index.ts` gives their
+order:
+
+| Scene                | File                | Duration   | Contents                         |
+| -------------------- | ------------------- | ---------- | -------------------------------- |
+| `Terrain and ship`   | `terrain-scene.ts`  | 40 seconds | The terrain and the ship.        |
+| `Asteroids and ship` | `asteroid-scene.ts` | No end     | The asteroids and the ship.      |
+
+The last scene continues until you stop the application.
+Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
+fades in from black in the same time.
+The camera path, the engines, and the engine boost continue across the transition.
+`App.sceneName` gives the name of the current scene.
+
+The App (`src/app.ts`) owns the objects that all scenes share: the sun, the terrain, the ship,
+the camera and its path, and the fade.
+In each frame, the App moves the camera and updates the ship.
+Then it calls `update()` of the current scene, which can record compute passes.
+In the render pass, it calls `draw()` of the current scene, and then draws the ship and the fade.
+A scene contains only its name, its duration, its own objects, and the shared objects that it draws.
+For example, the terrain scene moves and draws the shared terrain, and the asteroid scene makes and
+draws its own asteroids.
+
+To add a scene:
+
+1. Write a file in `src/scenes/` with a function that takes the `SharedObjects` and returns a
+   `Scene`.
+2. Add the function to `SCENES` in `src/scenes/index.ts`.
+
+## Asteroids
+
+The asteroid scene has `ASTEROID_COUNT` (4000) asteroids with a radius from 2 m to 60 m.
+Small asteroids are much more common than large asteroids.
+The GPU does all of the work after the start:
+
+1. At the start, a compute shader makes `ASTEROID_SHAPES` (8) rock shapes from an icosphere.
+   The surface uses the design of the terrain in 3D: Perlin noise and small craters with the same
+   bowl and rim.
+   Each shape is also stretched by a random amount on each axis.
+   Each shape has two levels of detail (LOD): 5120 triangles and 320 triangles.
+   Both come from the same surface function, so they have the same shape.
+2. In each frame, a compute shader moves and turns each asteroid.
+   It removes the asteroids that are outside the view, selects the LOD from the size on the screen,
+   and adds each visible asteroid to the list of its shape and LOD.
+   With an atomic add, it counts the instances of each list in the indirect draw buffer.
+3. The render pass draws each list with one instanced `drawIndexedIndirect` call (16 calls).
+   The vertex shader reads the shape vertices and the asteroid data from storage buffers.
+
+The asteroids move toward the camera at `FLOW_SPEED` (150 m/s), with a small random velocity each.
+They stay in a box around the ship: an asteroid that leaves one side comes back on the other side.
+No asteroid can go into a tube of radius `CLEAR_RADIUS` (130 m) along the flight line, so the
+asteroids do not hit the ship or the camera.
+The start positions come from a random number generator with a fixed seed, so each run of the
+benchmark is the same.
+The constants are at the top of `src/asteroids.ts`.
+
 ## Camera path
 
 The camera moves on a horizontal circle around the ship center, and it always looks at the ship
@@ -208,36 +273,33 @@ The ship is `SHIP_DISTANCE` meters from the camera, on the center of the view.
 The ship stays level, and its front (+Z in the model) points along the camera heading.
 Thus the camera sees the engines at the back of the ship.
 
-The engines run only while you hold Space:
-
-1. When you press Space, the `EnginesIgnite` animation plays once and the `EnginesRunning`
-   animation loops.
-2. When you release Space, the `EnginesShutdown` animation plays.
-   When it is complete, `EnginesRunning` stops.
-
-If you release Space during the ignition, the shutdown starts at the current flame size.
-If you press Space during the shutdown, the ignition starts at the current flame size.
-Thus the flames do not jump.
+The engines start when the application starts, and they run in all scenes.
+The `EnginesIgnite` animation plays once, and the `EnginesRunning` animation loops.
+`Ship.setEnginesOn(false)` plays the `EnginesShutdown` animation, and then stops `EnginesRunning`.
+A change in the middle of an ignition or a shutdown starts the other animation at the current
+flame size, so the flames do not jump.
 
 ### Engine boost
 
-When the engines run for `BOOST_DELAY` seconds (40), they boost for `BOOST_DURATION` seconds (3).
-Then they boost again after each 40 seconds, while you hold Space.
-When you release Space, the time starts again at 0.
+A scene turns the boost on with `Ship.setBoost(true)`.
+When a scene starts, the App turns the boost off and puts the ship back at its start position.
+
+The terrain scene starts the boost `FLY_OFF_TIME` seconds (3) before its end.
+Then the ship flies away from the camera with an acceleration of `FLY_OFF_ACCELERATION` (600 m/s²),
+so it is very small before the fade to black.
+The camera does not follow the ship.
+The asteroid scene starts with the ship at its start position, with the engines on and no boost.
 
 | Item                     | Without a boost                     | During a boost                 |
 | ------------------------ | ----------------------------------- | ------------------------------ |
 | Flames                   | `BOOST_BASE_LEVEL` (0.5) brightness | Full brightness, 1.6 x longer  |
 | Engine lights and glow   | 0.5 brightness                      | Full brightness                |
-| Terrain speed            | `TERRAIN_SPEED`                     | 2 x `TERRAIN_SPEED`            |
+| Terrain or asteroid speed | Usual speed                        | 2 x the usual speed            |
 
 The boost comes on in `BOOST_RISE_TIME` seconds (0.4) and goes off in `BOOST_FALL_TIME` seconds
 (1.2), so all of the changes are smooth.
-If you release Space during a boost, the boost goes off smoothly while the engines shut down.
-The `BOOST_` constants are at the top of `src/ship.ts`, and `BOOST_TERRAIN_SPEED` is at the top of
+The `BOOST_` constants are at the top of `src/ship.ts`, and `BOOST_SPEED_SCALE` is at the top of
 `src/app.ts`.
-The engines also stop when the window is not in focus, because the window does not get the key
-release.
 
 The solid parts of the ship use the sun with `applyLight()`.
 They do not get shadows from the terrain, and they do not cast shadows on the terrain.

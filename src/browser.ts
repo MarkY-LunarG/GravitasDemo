@@ -1,6 +1,5 @@
 // The browser target: show the scene (src/app.ts) in a canvas with the browser WebGPU API.
-// Hold Space to run the ship engines. Press W to toggle between the solid and the wireframe
-// terrain.
+// Press W to toggle between the solid and the wireframe terrain.
 
 import { App } from './app.js';
 import { parseGlb } from './gltf.js';
@@ -58,28 +57,12 @@ async function main(): Promise<void> {
   new ResizeObserver(resize).observe(canvas);
 
   window.addEventListener('keydown', (event) => {
-    if (event.key === ' ') {
-      // Prevent the page scroll that Space usually causes.
-      event.preventDefault();
-    }
     if (event.repeat) {
       return;
     }
     if (event.key === 'w' || event.key === 'W') {
       app.toggleTerrainRenderMode();
-    } else if (event.key === ' ') {
-      app.setEnginesOn(true);
     }
-  });
-  // The engines run only while Space is held down.
-  window.addEventListener('keyup', (event) => {
-    if (event.key === ' ') {
-      app.setEnginesOn(false);
-    }
-  });
-  // The page does not get the key release if it is not in focus, so stop the engines.
-  window.addEventListener('blur', () => {
-    app.setEnginesOn(false);
   });
 
   let previousTime = performance.now();

@@ -1,14 +1,29 @@
-// The scene: a terrain with Perlin noise and craters, the LunarG ship, the sun, and the camera.
+// The benchmark: a sequence of scenes with the LunarG ship, the sun, and the camera. Each scene is
+// in its own file in src/scenes/, and src/scenes/index.ts gives their order. The App owns the
+// objects that all scenes share: the terrain, the ship, the sun, the camera, and the fade. A short
+// fade through black goes from one scene to the next. The ship engines run in all scenes.
 // The camera follows a path that repeats: it moves around the ship to the left, then to the
-// right, and then back to the center. The terrain features move toward the ship.
+// right, and then back to the center.
 //
 // This code uses only the standard WebGPU API, so the desktop target (src/desktop.ts) and the
 // browser target (src/browser.ts) both use it. Each target makes the GPU device, loads the ship
 // model, sends key events to the App, and calls App.frame() once for each frame.
 
+import { Fade } from './fade.js';
 import { type GltfModel } from './gltf.js';
 import { DirectionalLight } from './light.js';
-import { type Vec3, compose, lookAt, multiply, perspective, transformPoint, viewToWorldDirection } from './mat4.js';
+import {
+  type Mat4,
+  type Vec3,
+  compose,
+  lookAt,
+  multiply,
+  perspective,
+  transformPoint,
+  viewToWorldDirection,
+} from './mat4.js';
+import { SCENES } from './scenes/index.js';
+import type { Scene, SharedObjects } from './scenes/scene.js';
 import { Ship } from './ship.js';
 import { TERRAIN_RADIUS, Terrain } from './terrain.js';
 
@@ -27,10 +42,9 @@ const FAR_PLANE = TERRAIN_RADIUS;
 // All pipelines that draw in the main render pass must use this depth format.
 const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus';
 
-// The speed at which the terrain features move toward the camera, in meters per second.
-// During an engine boost, the speed increases to BOOST_TERRAIN_SPEED times this value.
-const TERRAIN_SPEED = 1200;
-const BOOST_TERRAIN_SPEED = 2;
+// During an engine boost, things that move past the ship (for example the terrain features and
+// the asteroids) move up to BOOST_SPEED_SCALE times faster.
+const BOOST_SPEED_SCALE = 2;
 
 // The sun is a directional light. This is the sun position in the view space of a level camera
 // (pitch 0), where the camera is at the origin and looks along -Z, +X is to the right, and +Y is up.
@@ -118,14 +132,18 @@ function cameraEye(angle: number): Vec3 {
   ];
 }
 
-// Put the ship center at SHIP_CENTER. The ship stays level, and its front (+Z) points along the
-// start heading of the camera.
-function placeShip(ship: Ship): void {
+// Put the ship center forward meters in front of SHIP_CENTER. The ship stays level, and its front
+// (+Z) points along the start heading of the camera.
+function placeShip(ship: Ship, forward = 0): void {
   const yaw = Math.atan2(HEADING[0], HEADING[2]);
   const rotation = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)] as const;
   const rotatedCenter = transformPoint(compose([0, 0, 0], rotation, [1, 1, 1]), ship.center);
   ship.setPlacement(
-    [SHIP_CENTER[0] - rotatedCenter[0], SHIP_CENTER[1] - rotatedCenter[1], SHIP_CENTER[2] - rotatedCenter[2]],
+    [
+      SHIP_CENTER[0] + HEADING[0] * forward - rotatedCenter[0],
+      SHIP_CENTER[1] - rotatedCenter[1],
+      SHIP_CENTER[2] + HEADING[2] * forward - rotatedCenter[2],
+    ],
     rotation,
   );
 }
@@ -134,21 +152,47 @@ function computeProjection(aspect: number): Float32Array {
   return perspective(FIELD_OF_VIEW_Y, aspect, NEAR_PLANE, FAR_PLANE);
 }
 
+// The fade to black takes TRANSITION_FADE_TIME seconds before the end of a scene, and the fade
+// from black takes the same time after the start of the next scene.
+const TRANSITION_FADE_TIME = 0.5;
+
+// The scene at a time in seconds, the start time of the scene, and the amount of the fade to black
+// at that time (0 to 1). After the last scene ends, the last scene continues.
+function sceneAt(scenes: readonly Scene[], seconds: number): { scene: Scene; start: number; fade: number } {
+  let start = 0;
+  for (let index = 0; index < scenes.length; ++index) {
+    const scene = scenes[index];
+    const end = start + scene.duration;
+    if (seconds < end || index === scenes.length - 1) {
+      let fade = 0;
+      if (index > 0) {
+        fade = Math.max(fade, 1 - (seconds - start) / TRANSITION_FADE_TIME);
+      }
+      if (index < scenes.length - 1) {
+        fade = Math.max(fade, 1 - (end - seconds) / TRANSITION_FADE_TIME);
+      }
+      return { scene, start, fade: Math.max(0, Math.min(1, fade)) };
+    }
+    start = end;
+  }
+  return { scene: scenes[scenes.length - 1], start, fade: 0 };
+}
+
 export class App {
   private readonly device: GPUDevice;
   private readonly terrain: Terrain;
   private readonly ship: Ship;
+  private readonly fade: Fade;
+  private readonly scenes: readonly Scene[];
+  private currentScene: Scene | null = null;
   private depthTexture: GPUTexture | null = null;
-  // The time in seconds since the first frame. The camera path uses it.
+  // The time in seconds since the first frame. The camera path and the scene sequence use it.
   private elapsed = 0;
-  // worldPos moves forward along the start heading of the camera. The terrain samples its height
-  // field at worldPos, so the terrain features come toward the ship, but the ship does not move.
-  private readonly worldPos = [0, 0, 0];
 
   // format is the format of the texture views that frame() draws into.
   constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel) {
     this.device = device;
-    // All objects in the scene use this one light.
+    // All objects in all scenes use this one light.
     const sun = new DirectionalLight(
       device,
       viewToWorldDirection(computeView(0), SUN_VIEW_POSITION),
@@ -158,45 +202,80 @@ export class App {
     this.terrain = new Terrain(device, format, DEPTH_FORMAT, sun);
     this.ship = new Ship(device, format, DEPTH_FORMAT, sun, shipModel);
     placeShip(this.ship);
+    this.ship.setEnginesOn(true);
+    this.fade = new Fade(device, format, DEPTH_FORMAT);
+    const shared: SharedObjects = {
+      device,
+      format,
+      depthFormat: DEPTH_FORMAT,
+      sun,
+      terrain: this.terrain,
+      ship: this.ship,
+      shipCenter: SHIP_CENTER,
+      heading: HEADING,
+      moveShipForward: (distance) => placeShip(this.ship, distance),
+    };
+    this.scenes = SCENES.map((createScene) => createScene(shared));
   }
 
-  // The engines run only while the target reports that Space is held down.
-  setEnginesOn(on: boolean): void {
-    this.ship.setEnginesOn(on);
+  // The name of the current benchmark scene.
+  get sceneName(): string {
+    return sceneAt(this.scenes, this.elapsed).scene.name;
   }
 
   toggleTerrainRenderMode(): void {
     this.terrain.setRenderMode(this.terrain.renderMode === 'solid' ? 'wireframe' : 'solid');
   }
 
-  // Advance the scene by a time step in seconds, and draw it into colorView. width and height are
-  // the size of colorView in pixels.
+  // Advance the current scene and the ship by a time step in seconds, and draw them into
+  // colorView. width and height are the size of colorView in pixels.
   frame(seconds: number, colorView: GPUTextureView, width: number, height: number): void {
     this.elapsed += seconds;
-    this.updateCamera(width / height);
+    const { scene, start, fade } = sceneAt(this.scenes, this.elapsed);
+    // Each scene starts with the ship at its start position, and with no boost.
+    if (scene !== this.currentScene) {
+      this.currentScene = scene;
+      placeShip(this.ship);
+      this.ship.setBoost(false);
+    }
+    const { viewProjection, cameraPosition } = this.updateCamera(width / height);
     this.ship.update(seconds);
-    // The boost level changes smoothly, so the speed also changes smoothly.
-    const speed = TERRAIN_SPEED * (1 + (BOOST_TERRAIN_SPEED - 1) * this.ship.boostLevel);
-    this.worldPos[0] += HEADING[0] * speed * seconds;
-    this.worldPos[2] += HEADING[2] * speed * seconds;
-    this.terrain.update([this.worldPos[0], this.worldPos[1], this.worldPos[2]]);
-    this.render(colorView, width, height);
+    const encoder = this.device.createCommandEncoder();
+    scene.update?.({
+      seconds,
+      sceneTime: this.elapsed - start,
+      // The boost level changes smoothly, so the speed also changes smoothly.
+      speedScale: 1 + (BOOST_SPEED_SCALE - 1) * this.ship.boostLevel,
+      viewProjection,
+      cameraPosition,
+      encoder,
+    });
+    this.render(encoder, colorView, width, height, scene, fade);
   }
 
-  // Move the camera along its path. The terrain grid follows the camera, so that the grid always
-  // covers the view.
-  private updateCamera(aspect: number): void {
+  // Move the camera along its path, and give the camera to the shared objects. The terrain grid
+  // follows the camera, so that the grid always covers the view.
+  private updateCamera(aspect: number): { viewProjection: Mat4; cameraPosition: Vec3 } {
     const eye = cameraEye(cameraOrbitAngle(this.elapsed));
     const toShip = [SHIP_CENTER[0] - eye[0], 0, SHIP_CENTER[2] - eye[2]] as const;
     const length = Math.hypot(toShip[0], toShip[2]);
     this.terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);
     const view = lookAt(eye, SHIP_CENTER, [0, 1, 0]);
     const projection = computeProjection(aspect);
-    this.terrain.setViewProjection(multiply(projection, view));
+    const viewProjection = multiply(projection, view);
+    this.terrain.setViewProjection(viewProjection);
     this.ship.setCamera(view, projection);
+    return { viewProjection, cameraPosition: eye };
   }
 
-  private render(colorView: GPUTextureView, width: number, height: number): void {
+  private render(
+    encoder: GPUCommandEncoder,
+    colorView: GPUTextureView,
+    width: number,
+    height: number,
+    scene: Scene,
+    fade: number,
+  ): void {
     // The depth texture must have the same size as the color texture.
     if (!this.depthTexture || this.depthTexture.width !== width || this.depthTexture.height !== height) {
       this.depthTexture?.destroy();
@@ -206,7 +285,6 @@ export class App {
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
     }
-    const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
@@ -223,8 +301,11 @@ export class App {
         depthStoreOp: 'discard',
       },
     });
-    this.terrain.draw(pass);
+    // The ship goes after the scene objects, because its flames and glow are blended and do not
+    // write depth. Objects that draw after them would cover them.
+    scene.draw(pass);
     this.ship.draw(pass);
+    this.fade.draw(pass, fade);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
   }
