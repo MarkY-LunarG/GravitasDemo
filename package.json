@@ -1,0 +1,22 @@
+{
+  "name": "webgpu-hackathon-2026",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "dependencies": {
+    "@kmamal/gpu": "^0.2.1",
+    "@kmamal/sdl": "^0.11.13"
+  }
+}
