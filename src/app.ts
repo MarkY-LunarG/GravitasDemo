@@ -28,7 +28,9 @@ const FAR_PLANE = TERRAIN_RADIUS;
 const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus';
 
 // The speed at which the terrain features move toward the camera, in meters per second.
+// During an engine boost, the speed increases to BOOST_TERRAIN_SPEED times this value.
 const TERRAIN_SPEED = 1200;
+const BOOST_TERRAIN_SPEED = 2;
 
 // The sun is a directional light. This is the sun position in the view space of a level camera
 // (pitch 0), where the camera is at the origin and looks along -Z, +X is to the right, and +Y is up.
@@ -172,10 +174,12 @@ export class App {
   frame(seconds: number, colorView: GPUTextureView, width: number, height: number): void {
     this.elapsed += seconds;
     this.updateCamera(width / height);
-    this.worldPos[0] += HEADING[0] * TERRAIN_SPEED * seconds;
-    this.worldPos[2] += HEADING[2] * TERRAIN_SPEED * seconds;
-    this.terrain.update([this.worldPos[0], this.worldPos[1], this.worldPos[2]]);
     this.ship.update(seconds);
+    // The boost level changes smoothly, so the speed also changes smoothly.
+    const speed = TERRAIN_SPEED * (1 + (BOOST_TERRAIN_SPEED - 1) * this.ship.boostLevel);
+    this.worldPos[0] += HEADING[0] * speed * seconds;
+    this.worldPos[2] += HEADING[2] * speed * seconds;
+    this.terrain.update([this.worldPos[0], this.worldPos[1], this.worldPos[2]]);
     this.render(colorView, width, height);
   }
 

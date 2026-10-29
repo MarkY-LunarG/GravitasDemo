@@ -218,6 +218,24 @@ The engines run only while you hold Space:
 If you release Space during the ignition, the shutdown starts at the current flame size.
 If you press Space during the shutdown, the ignition starts at the current flame size.
 Thus the flames do not jump.
+
+### Engine boost
+
+When the engines run for `BOOST_DELAY` seconds (40), they boost for `BOOST_DURATION` seconds (3).
+Then they boost again after each 40 seconds, while you hold Space.
+When you release Space, the time starts again at 0.
+
+| Item                     | Without a boost                     | During a boost                 |
+| ------------------------ | ----------------------------------- | ------------------------------ |
+| Flames                   | `BOOST_BASE_LEVEL` (0.5) brightness | Full brightness, 1.6 x longer  |
+| Engine lights and glow   | 0.5 brightness                      | Full brightness                |
+| Terrain speed            | `TERRAIN_SPEED`                     | 2 x `TERRAIN_SPEED`            |
+
+The boost comes on in `BOOST_RISE_TIME` seconds (0.4) and goes off in `BOOST_FALL_TIME` seconds
+(1.2), so all of the changes are smooth.
+If you release Space during a boost, the boost goes off smoothly while the engines shut down.
+The `BOOST_` constants are at the top of `src/ship.ts`, and `BOOST_TERRAIN_SPEED` is at the top of
+`src/app.ts`.
 The engines also stop when the window is not in focus, because the window does not get the key
 release.
 

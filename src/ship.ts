@@ -113,7 +113,22 @@ fn fs_glow(input: GlowOutput) -> @location(0) vec4f {
 
 // The flame colors are multiplied by this value. The viewer uses HDR colors and bloom to make
 // the flames glow. This renderer has no HDR, so a smaller value keeps more of the color.
+// This is the brightness during a boost. Outside a boost, see BOOST_BASE_LEVEL.
 const FLAME_BRIGHTNESS = 1.5;
+
+// The engine boost. After the engines run for BOOST_DELAY seconds, they boost for BOOST_DURATION
+// seconds, and then again after each BOOST_DELAY seconds while they run. When the engines shut
+// down, the time starts again at 0.
+// Outside a boost, the flames, the engine lights, and the glow have BOOST_BASE_LEVEL of their full
+// brightness. During a boost, they have full brightness, and the flames are BOOST_FLAME_LENGTH
+// times longer. The boost level goes from 0 to 1 in BOOST_RISE_TIME seconds, and from 1 to 0 in
+// BOOST_FALL_TIME seconds, so the change is smooth.
+const BOOST_DELAY = 24;
+const BOOST_DURATION = 7;
+const BOOST_RISE_TIME = 0.4;
+const BOOST_FALL_TIME = 1.2;
+const BOOST_BASE_LEVEL = 0.5;
+const BOOST_FLAME_LENGTH = 1.6;
 // A mesh with a world scale smaller than this is not drawn. The flames have a scale of 0.0001
 // when the engines are off.
 const MIN_DRAW_SCALE = 0.001;
@@ -273,6 +288,10 @@ export class Ship {
   private readonly engineLightData = new Float32Array(ENGINE_LIGHT_COUNT * 8);
   // The time in seconds since the ship was made. The flicker uses it.
   private clock = 0;
+  // The time in seconds that the engines have run at full power, since the last ignition.
+  private engineRunTime = 0;
+  // From 0 (no boost) to 1 (full boost).
+  private boost = 0;
   private readonly ignite: GltfAnimation;
   private readonly running: GltfAnimation;
   private readonly shutdown: GltfAnimation;
@@ -548,9 +567,16 @@ export class Ship {
     }
   }
 
+  // The engine boost level, from 0 (no boost) to 1 (full boost). The scene can use it, for
+  // example to change the speed of the terrain.
+  get boostLevel(): number {
+    return this.boost;
+  }
+
   // Advance the animations by a time step in seconds.
   update(seconds: number): void {
     this.clock += seconds;
+    this.updateBoost(seconds);
     if (this.engineState === 'running') {
       this.igniteTime = Math.min(this.igniteTime + seconds, this.ignite.duration);
       this.runningTime = (this.runningTime + seconds) % this.running.duration;
@@ -566,6 +592,7 @@ export class Ship {
 
   draw(pass: RenderPassEncoder): void {
     this.writeEngineLights();
+    const brightness = this.boostBrightness();
     this.light.bind(pass);
     // Draw the blended flames after all opaque surfaces, so that the depth test hides the
     // parts of the flames that are behind the ship.
@@ -576,7 +603,10 @@ export class Ship {
       }
       this.uniformData.set(multiply(this.viewProjection, world), 0);
       this.uniformData.set(world, 16);
-      this.uniformData.set(item.primitive.material.baseColor, 32);
+      // The boost changes the brightness of the unlit flame materials.
+      const [r, g, b, a] = item.primitive.material.baseColor;
+      const scale = item.primitive.material.unlit ? brightness : 1;
+      this.uniformData.set([r * scale, g * scale, b * scale, a], 32);
       const weights = this.poses[item.node].weights;
       this.uniformData.set([weights[0] ?? 0, weights[1] ?? 0, 0, 0], 36);
       this.device.queue.writeBuffer(item.uniformBuffer, 0, this.uniformData);
@@ -609,7 +639,8 @@ export class Ship {
       // The flicker is in [-1, 1], so the strength changes between (1 - 2 * ENGINE_LIGHT_FLICKER)
       // and 1 times its full value.
       const flickerScale = 1 - ENGINE_LIGHT_FLICKER + ENGINE_LIGHT_FLICKER * flicker;
-      const strength = size < 0.01 ? 0 : ENGINE_LIGHT_INTENSITY * size * flickerScale;
+      // The glow uses the light color, so the boost also changes the glow.
+      const strength = size < 0.01 ? 0 : ENGINE_LIGHT_INTENSITY * size * flickerScale * this.boostBrightness();
       this.engineLightData.set([...position, 0], i * 8);
       this.engineLightData.set(
         [ENGINE_LIGHT_COLOR[0] * strength, ENGINE_LIGHT_COLOR[1] * strength, ENGINE_LIGHT_COLOR[2] * strength, 0],
@@ -646,6 +677,23 @@ export class Ship {
     return bestTime;
   }
 
+  // The boost starts after BOOST_DELAY seconds of running, and repeats each BOOST_DELAY seconds.
+  // The boost level moves toward its target at a limited rate, so that it does not jump, also when
+  // the engines shut down in the middle of a boost.
+  private updateBoost(seconds: number): void {
+    this.engineRunTime = this.engineState === 'running' ? this.engineRunTime + seconds : 0;
+    const boosting =
+      this.engineRunTime >= BOOST_DELAY && (this.engineRunTime - BOOST_DELAY) % BOOST_DELAY < BOOST_DURATION;
+    const target = boosting ? 1 : 0;
+    const change = Math.max(-seconds / BOOST_FALL_TIME, Math.min(seconds / BOOST_RISE_TIME, target - this.boost));
+    this.boost += change;
+  }
+
+  // The brightness of the flames, the engine lights, and the glow, as a fraction of full brightness.
+  private boostBrightness(): number {
+    return BOOST_BASE_LEVEL + (1 - BOOST_BASE_LEVEL) * this.boost;
+  }
+
   // Start from the rest pose of each node, then apply the active animations.
   private updatePose(): void {
     this.model.nodes.forEach((node, index) => {
@@ -662,6 +710,11 @@ export class Ship {
       this.applyAnimation(this.ignite, this.igniteTime);
     } else if (this.engineState === 'shuttingDown') {
       this.applyAnimation(this.shutdown, this.shutdownTime);
+    }
+    // The flames point along -Z of their root, so a larger Z scale makes them longer.
+    const length = 1 + (BOOST_FLAME_LENGTH - 1) * this.boost;
+    for (const { flameRoot } of this.engines) {
+      this.poses[flameRoot].scale[2] *= length;
     }
     this.updateWorldMatrices();
   }
