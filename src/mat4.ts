@@ -57,6 +57,17 @@ export function perspective(fovYRadians: number, aspect: number, near: number, f
   ]);
 }
 
+// Rotate a direction from view space (the space of a lookAt() matrix) into world space.
+// In view space the camera looks along -Z, +X is to the right, and +Y is up.
+export function viewToWorldDirection(view: Mat4, direction: Vec3): Vec3 {
+  // The rotation part of a view matrix is orthonormal, so its transpose is its inverse.
+  return [
+    view[0] * direction[0] + view[1] * direction[1] + view[2] * direction[2],
+    view[4] * direction[0] + view[5] * direction[1] + view[6] * direction[2],
+    view[8] * direction[0] + view[9] * direction[1] + view[10] * direction[2],
+  ];
+}
+
 export function lookAt(eye: Vec3, target: Vec3, up: Vec3): Mat4 {
   const zAxis = normalize(subtract(eye, target));
   const xAxis = normalize(cross(up, zAxis));

@@ -60,6 +60,7 @@ The window close button also exits the application.
 | -------------------- | --------------------------------------------------------------------- |
 | `src/main.ts`        | Window, camera, key handling, and the render loop.                    |
 | `src/terrain.ts`     | The terrain grid: shaders, pipelines, and the solid/wireframe mode.   |
+| `src/light.ts`       | The directional light that all objects share, and its WGSL code.      |
 | `src/mat4.ts`        | 4x4 matrix functions for the model, view, and projection matrices.    |
 | `src/gpu-types.ts`   | WebGPU type names from the `@kmamal/gpu` typings.                     |
 
@@ -67,6 +68,22 @@ To change the camera position, the look-at point, or the field of view, edit the
 top of `src/main.ts`.
 To change the grid size or the number of grid points, edit the constants at the top of
 `src/terrain.ts`.
+To change the direction or the color of the sun, edit the `SUN_` constants in `src/main.ts`.
+
+## Lighting
+
+One directional light, the sun, lights the scene.
+`SUN_VIEW_POSITION` in `src/main.ts` sets the sun direction relative to the camera.
+The value `[-9000, 9000 * Math.SQRT2, -9000]` puts the sun in front of the camera,
+45 degrees to the left of the view direction, and 45 degrees above the horizon.
+The solid terrain uses diffuse (Lambert) lighting with an ambient term.
+The wireframe terrain does not use the light.
+
+To light a new object with the same sun:
+
+1. Add `LIGHT_WGSL` to the shader code, and call `applyLight()` in the fragment shader.
+2. Put `light.bindGroupLayout` at index `LIGHT_BIND_GROUP` in the pipeline layout.
+3. Call `light.bind(pass)` before the draw.
 All world units are meters.
 
 ## Known issues

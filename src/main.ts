@@ -4,7 +4,8 @@
 
 import gpu from '@kmamal/gpu';
 import sdl from '@kmamal/sdl';
-import { lookAt, multiply, perspective } from './mat4.js';
+import { DirectionalLight } from './light.js';
+import { lookAt, multiply, perspective, viewToWorldDirection } from './mat4.js';
 import { TERRAIN_EXTENT, Terrain } from './terrain.js';
 
 const WIDTH = 1920;
@@ -18,10 +19,22 @@ const FIELD_OF_VIEW_Y = (45 * Math.PI) / 180;
 const NEAR_PLANE = 1;
 const FAR_PLANE = 5000;
 
+// The sun is a directional light. This is the sun position in view space, where the camera
+// is at the origin and looks along -Z, +X is to the right, and +Y is up.
+// The sun is in front of the camera, 45 degrees to the left of the view direction, and
+// 45 degrees above the horizon: the height is equal to the horizontal distance, 9000 * sqrt(2).
+// Only the direction to this point is important, because the sun is infinitely far away.
+const SUN_VIEW_POSITION = [-9000, 9000 * Math.SQRT2, -9000] as const;
+const SUN_COLOR = [1.0, 0.95, 0.85] as const;
+const AMBIENT_COLOR = [0.25, 0.27, 0.32] as const;
+
+function computeView(): Float32Array {
+  return lookAt([CAMERA_CORNER, EYE_HEIGHT, CAMERA_CORNER], [0, TARGET_HEIGHT, 0], [0, 1, 0]);
+}
+
 function computeViewProjection(aspect: number): Float32Array {
-  const view = lookAt([CAMERA_CORNER, EYE_HEIGHT, CAMERA_CORNER], [0, TARGET_HEIGHT, 0], [0, 1, 0]);
   const projection = perspective(FIELD_OF_VIEW_Y, aspect, NEAR_PLANE, FAR_PLANE);
-  return multiply(projection, view);
+  return multiply(projection, computeView());
 }
 
 async function main(): Promise<void> {
@@ -49,7 +62,14 @@ async function main(): Promise<void> {
   // The pipelines must use the same format as the window surface.
   const surfaceFormat = renderer.getCurrentTexture().format;
 
-  const terrain = new Terrain(device, surfaceFormat);
+  // All objects in the scene use this one light.
+  const sun = new DirectionalLight(
+    device,
+    viewToWorldDirection(computeView(), SUN_VIEW_POSITION),
+    SUN_COLOR,
+    AMBIENT_COLOR,
+  );
+  const terrain = new Terrain(device, surfaceFormat, sun);
 
   const updateCamera = (): void => {
     terrain.setViewProjection(computeViewProjection(window.pixelWidth / window.pixelHeight));

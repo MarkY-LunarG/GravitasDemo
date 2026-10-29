@@ -3,6 +3,7 @@
 
 import gpu from '@kmamal/gpu';
 import type { Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
+import { type DirectionalLight, LIGHT_WGSL } from './light.js';
 import { type Mat4, type Vec3, multiply, translationScale } from './mat4.js';
 
 export type TerrainRenderMode = 'solid' | 'wireframe';
@@ -23,6 +24,7 @@ const WIRE_VERTEX_COUNT = 2 * GRID_POINTS * CELLS_PER_ROW * 2;
 // index buffers are necessary. Grid coordinates are in [0, 1] and the model matrix
 // moves them into world space.
 const SHADER = /* wgsl */ `
+${LIGHT_WGSL}
 const CELLS_PER_ROW: u32 = ${CELLS_PER_ROW}u;
 const GRID_POINTS: u32 = ${GRID_POINTS}u;
 
@@ -35,6 +37,7 @@ struct Uniforms {
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) gridCoord: vec2f,
+  @location(1) worldNormal: vec3f,
 }
 
 fn makeVertex(column: u32, row: u32) -> VertexOutput {
@@ -42,6 +45,8 @@ fn makeVertex(column: u32, row: u32) -> VertexOutput {
   var output: VertexOutput;
   output.position = uniforms.mvp * vec4f(gridCoord.x, 0.0, gridCoord.y, 1.0);
   output.gridCoord = gridCoord;
+  // The grid is flat, and the model matrix has no rotation, so the normal is +Y.
+  output.worldNormal = vec3f(0.0, 1.0, 0.0);
   return output;
 }
 
@@ -75,7 +80,7 @@ fn fs_solid(input: VertexOutput) -> @location(0) vec4f {
   // A 100 m checkerboard makes the perspective of the flat surface visible.
   let checker = vec2u(floor(input.gridCoord * 10.0));
   let shade = select(0.35, 0.5, (checker.x + checker.y) % 2u == 0u);
-  return vec4f(0.1, shade, 0.1, 1.0);
+  return vec4f(applyLight(vec3f(0.1, shade, 0.1), input.worldNormal), 1.0);
 }
 
 @fragment
@@ -86,6 +91,7 @@ fn fs_wire(input: VertexOutput) -> @location(0) vec4f {
 
 export class Terrain {
   private readonly device: Device;
+  private readonly light: DirectionalLight;
   private readonly uniformBuffer;
   private readonly bindGroup;
   private readonly solidPipeline;
@@ -94,8 +100,9 @@ export class Terrain {
   private worldPosition: Vec3;
   private mode: TerrainRenderMode = 'solid';
 
-  constructor(device: Device, format: TextureFormat) {
+  constructor(device: Device, format: TextureFormat, light: DirectionalLight) {
     this.device = device;
+    this.light = light;
     this.modelMatrix = translationScale([-HALF_EXTENT, 0, -HALF_EXTENT], [TERRAIN_EXTENT, 1, TERRAIN_EXTENT]);
     this.worldPosition = [0, 0, 0];
 
@@ -104,11 +111,11 @@ export class Terrain {
       usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
     });
 
-    // Both pipelines share one layout so that one bind group works for both.
+    // Both pipelines share one layout so that the same bind groups work for both.
     const bindGroupLayout = device.createBindGroupLayout({
       entries: [{ binding: 0, visibility: gpu.GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
     });
-    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout, light.bindGroupLayout] });
     this.bindGroup = device.createBindGroup({
       layout: bindGroupLayout,
       entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }],
@@ -159,6 +166,7 @@ export class Terrain {
 
   draw(pass: RenderPassEncoder): void {
     pass.setBindGroup(0, this.bindGroup);
+    this.light.bind(pass);
     if (this.mode === 'wireframe') {
       pass.setPipeline(this.wirePipeline);
       pass.draw(WIRE_VERTEX_COUNT);
