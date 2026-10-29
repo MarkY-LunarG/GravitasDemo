@@ -1,6 +1,8 @@
 // Scene: the ship flies above the terrain. The terrain features move toward the ship.
 // FLY_OFF_TIME seconds before the end, the ship boosts and flies away from the camera.
+// The sky above the terrain is black with stars.
 
+import { Sky } from '../sky.js';
 import type { Scene, SharedObjects } from './scene.js';
 
 // The speed at which the terrain features move toward the ship, in meters per second.
@@ -15,10 +17,15 @@ export function createTerrainScene(shared: SharedObjects): Scene {
   // The terrain samples its height field at worldPos. worldPos moves along the heading, so the
   // terrain features come toward the ship, but the ship does not move until it flies off.
   const worldPos = [0, 0, 0];
+  const sky = new Sky(shared.device, shared.format, shared.depthFormat, shared.sun, shared.heading, {
+    nebula: false,
+    planet: null,
+  });
   return {
     name: 'Terrain and ship',
     duration: DURATION,
-    update({ seconds, sceneTime, speedScale }) {
+    update({ seconds, sceneTime, speedScale, viewProjection, cameraPosition }) {
+      sky.setCamera(viewProjection, cameraPosition);
       const distance = TERRAIN_SPEED * speedScale * seconds;
       worldPos[0] += shared.heading[0] * distance;
       worldPos[2] += shared.heading[2] * distance;
@@ -32,6 +39,8 @@ export function createTerrainScene(shared: SharedObjects): Scene {
     },
     draw(pass) {
       shared.terrain.draw(pass);
+      // After the terrain, so that the depth test skips the sky behind the terrain.
+      sky.draw(pass);
     },
   };
 }

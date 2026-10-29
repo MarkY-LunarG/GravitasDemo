@@ -94,6 +94,8 @@ The window close button also exits the desktop application.
 | `src/app.ts`         | The shared scenes: scene list, camera path, sun, ship placement, and frames. |
 | `src/fade.ts`        | The fade to black between scenes.                                     |
 | `src/asteroids.ts`   | The asteroids: shape, update, and cull compute shaders, and indirect draws. |
+| `src/sky.ts`         | The background: stars, and as options a nebula and a ringed planet.   |
+| `src/noise.ts`       | WGSL hash and 3D Perlin noise that the asteroids and the sky use.     |
 | `src/scenes/scene.ts` | The `Scene` interface, and the shared objects that scenes can use.   |
 | `src/scenes/index.ts` | The list of scenes, in the order that they play.                     |
 | `src/scenes/terrain-scene.ts` | Scene 1: the terrain and the ship.                           |
@@ -192,8 +194,8 @@ order:
 
 | Scene                | File                | Duration   | Contents                         |
 | -------------------- | ------------------- | ---------- | -------------------------------- |
-| `Terrain and ship`   | `terrain-scene.ts`  | 40 seconds | The terrain and the ship.        |
-| `Asteroids and ship` | `asteroid-scene.ts` | No end     | The asteroids and the ship.      |
+| `Terrain and ship`   | `terrain-scene.ts`  | 40 seconds | The terrain, the ship, and stars. |
+| `Asteroids and ship` | `asteroid-scene.ts` | No end     | The asteroids, the ship, and a planet, a nebula, and stars. |
 
 The last scene continues until you stop the application.
 Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
@@ -215,6 +217,33 @@ To add a scene:
 1. Write a file in `src/scenes/` with a function that takes the `SharedObjects` and returns a
    `Scene`.
 2. Add the function to `SCENES` in `src/scenes/index.ts`.
+
+## Sky
+
+`src/sky.ts` draws the background of a scene with one full-screen shader.
+For each pixel, the shader calculates the view direction, so the background is infinitely far
+away: the camera position does not change it, but the camera rotation does.
+Each scene makes its own `Sky` with the options that it needs:
+
+- Stars, in all skies: three layers of random stars.
+  Most stars are faint and white, some are blue, yellow, or red, and a few bright stars have a
+  glow and four spikes.
+- `nebula`: a dark blue background that is brighter near the sun, with purple and green clouds.
+  Without it, the background is black.
+- `planet`: a planet with swirled bands, a thin gold atmosphere at the lit edge, a tilted ring with
+  bands and gaps, and two small moons.
+  The shader traces a ray to the planet, the ring, and the moons, and blends them from far to near.
+  The planet casts a shadow on the ring.
+  `rightDegrees`, `elevationDegrees`, and `radiusDegrees` set the position and the size of the
+  planet.
+
+The planet and the moons use the shared sun.
+The sun is to the left of the view and behind the camera, so a planet at the right of the view is
+approximately one third lit, with the lit side at the upper left.
+
+The sky is drawn after the opaque objects of the scene, at the far plane, and it does not write
+depth.
+Thus the depth test skips the sky where the terrain or the asteroids cover it.
 
 ## Asteroids
 
