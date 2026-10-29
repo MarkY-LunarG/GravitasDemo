@@ -1,15 +1,21 @@
 # WebGPU Hackathon 2026
 
-This application renders a terrain grid with WebGPU in Node.js.
-It shows the grid in an SDL window.
+This application renders a terrain grid with WebGPU.
+It has two targets that share the same rendering code:
+
+- Desktop: Node.js with an SDL window.
+- Browser: a web page with a canvas, served and built with [Vite](https://vite.dev).
+
 The camera is 500 m above the ground and tilts down.
 The hills and craters move toward the ship, but the ship does not move.
 The camera moves around the ship on a path that repeats every 20 seconds.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
 
-The application uses [`@kmamal/gpu`](https://github.com/kmamal/gpu) for WebGPU through Google Dawn.
+The desktop target uses [`@kmamal/gpu`](https://github.com/kmamal/gpu) for WebGPU through Google
+Dawn.
 It uses [`@kmamal/sdl`](https://github.com/kmamal/node-sdl) for the window and the keyboard.
+The browser target uses the WebGPU API of the browser.
 
 The application uses the prerelease versions `@kmamal/gpu` 1.0.0-6 and `@kmamal/sdl` 1.0.0-5
 (SDL3).
@@ -20,8 +26,10 @@ for a window from `@kmamal/sdl` 0.11.
 ## Requirements
 
 - Node.js 24 or later.
-- A GPU and driver that Dawn supports (Vulkan on Linux, D3D12 on Windows, Metal on macOS).
-- A desktop session. The application opens a window, so it does not run headless.
+- Desktop target: a GPU and driver that Dawn supports (Vulkan on Linux, D3D12 on Windows, Metal on
+  macOS), and a desktop session.
+  The application opens a window, so it does not run headless.
+- Browser target: a browser with WebGPU, for example a recent Chrome, Edge, Firefox, or Safari.
 
 ## Install
 
@@ -34,20 +42,33 @@ If npm reports that it did not run their install scripts, the application still 
 
 ## Run
 
-Run the TypeScript source directly with `tsx`:
+| Command               | Target                                                                 |
+| --------------------- | ---------------------------------------------------------------------- |
+| `npm start`           | Desktop. Runs the TypeScript source directly with `tsx`.               |
+| `npm run desktop`     | The same as `npm start`.                                               |
+| `npm run browser`     | Browser. Starts the Vite development server. Open the URL that it shows. |
 
-```sh
-npm start
-```
+The Vite development server loads the changes when you save a file.
 
 ## Build
 
-Compile the TypeScript to JavaScript in `dist/`, then run the result:
+Desktop: compile the TypeScript to JavaScript in `dist/`, then run the result:
 
 ```sh
 npm run build
-node dist/main.js
+node dist/desktop.js
 ```
+
+Browser: build static files in `dist-web/`.
+Copy the folder to a web server, or show it with the Vite preview server:
+
+```sh
+npm run build:browser
+npm run preview:browser
+```
+
+The pages use relative paths, so they work from any folder on a web server.
+Browsers do not load the page from `file://` URLs, so you must use a web server.
 
 To do a type check without output files:
 
@@ -60,28 +81,32 @@ npm run typecheck
 | Key   | Action                                          |
 | ----- | ----------------------------------------------- |
 | `W`   | Toggle between the solid and wireframe terrain. |
-| `Esc` | Exit the application.                           |
+| `Esc` | Exit the application (desktop only).            |
 | Space | Hold to run the ship engines.                   |
 
-The window close button also exits the application.
+The window close button also exits the desktop application.
 
 ## Source files
 
 | File                 | Contents                                                              |
 | -------------------- | --------------------------------------------------------------------- |
-| `src/main.ts`        | Window, camera, key handling, and the render loop.                    |
+| `src/app.ts`         | The shared scene: camera, camera path, sun, ship placement, and frames. |
+| `src/desktop.ts`     | Desktop target: SDL window, Dawn device, keys, and the frame loop.    |
+| `src/browser.ts`     | Browser target: canvas, browser WebGPU device, keys, and frames.      |
+| `index.html`         | The browser page. Vite uses it as the entry point.                    |
+| `vite.config.ts`     | The Vite configuration for the browser target.                        |
 | `src/terrain.ts`     | The terrain grid: shaders, pipelines, and the solid/wireframe mode.   |
 | `src/light.ts`       | The directional light that all objects share, and its WGSL code.      |
 | `src/mat4.ts`        | 4x4 matrix functions for the model, view, and projection matrices.    |
-| `src/gpu-types.ts`   | WebGPU type names from the `@kmamal/gpu` typings.                     |
-| `src/gltf.ts`        | A minimal binary glTF (.glb) loader and an animation sampler.         |
+| `src/gpu-types.ts`   | Short names for WebGPU types from `@webgpu/types`.                    |
+| `src/gltf.ts`        | A minimal binary glTF (.glb) parser and an animation sampler.         |
 | `src/ship.ts`        | The ship: pipelines, the engine animations, and the engine state.     |
 
 To change the camera position, the camera pitch (`CAMERA_PITCH`), or the field of view, edit the
-constants at the top of `src/main.ts`.
+constants at the top of `src/app.ts`.
 To change the grid size or the number of grid points, edit the constants at the top of
 `src/terrain.ts`.
-To change the direction or the color of the sun, edit the `SUN_` constants in `src/main.ts`.
+To change the direction or the color of the sun, edit the `SUN_` constants in `src/app.ts`.
 All world units are meters.
 
 ## Terrain
@@ -109,7 +134,7 @@ pixels wide at 1920 x 1080.
 `GRID_COLUMNS`, `GRID_ROWS`, `GRID_NEAR`, `GRID_HALF_ANGLE`, and `TERRAIN_RADIUS` at the top of
 `src/terrain.ts` set the shape of the grid.
 `Terrain.setGridCenter()` puts the grid below the camera and turns it to the camera heading.
-`src/main.ts` calls it in each frame, so the grid follows the camera.
+`src/app.ts` calls it in each frame, so the grid follows the camera.
 
 Far cells are large, so the shader removes noise octaves and craters that are smaller than
 approximately 4 cells.
@@ -118,14 +143,14 @@ Without this, the small features would flicker as the terrain moves.
 The grid does not move.
 `Terrain.update()` sets `worldPos`, an offset that the shader adds to each grid point before it
 samples the height field.
-Each frame, `src/main.ts` moves `worldPos` along the camera heading at `TERRAIN_SPEED` meters
+Each frame, `src/app.ts` moves `worldPos` along the camera heading at `TERRAIN_SPEED` meters
 per second.
 Thus the terrain features come toward the camera.
 
 ## Lighting
 
 One directional light, the sun, lights the scene.
-`SUN_VIEW_POSITION` in `src/main.ts` sets the sun direction relative to the camera heading.
+`SUN_VIEW_POSITION` in `src/app.ts` sets the sun direction relative to the camera heading.
 The camera pitch does not change the sun direction.
 The value `[-9000, 9000 * Math.SQRT2, -9000]` puts the sun in front of the camera,
 45 degrees to the left of the view direction, and 45 degrees above the horizon.
@@ -148,7 +173,7 @@ To light a new object with the same sun:
    Call `applyLight()` in the fragment shader, or call `applyShadowedLight()` if the object
    calculates its own shadows.
 2. Put `light.bindGroupLayout` at index `LIGHT_BIND_GROUP` in the pipeline layout.
-3. Give the pipeline a `depthStencil` state with the format `DEPTH_FORMAT` from `src/main.ts`.
+3. Give the pipeline a `depthStencil` state with the format `DEPTH_FORMAT` from `src/app.ts`.
 4. Call `light.bind(pass)` before the draw.
 
 Other objects do not cast shadows on the terrain, and the terrain does not cast shadows on them.
@@ -170,14 +195,15 @@ The path repeats every `CAMERA_PATH_PERIOD` seconds (20):
 | 16 to 18 | Moves back to the start position.                        |
 | 18 to 20 | Stays at the start position.                             |
 
-`CAMERA_PATH` in `src/main.ts` holds these times and angles.
+`CAMERA_PATH` in `src/app.ts` holds these times and angles.
 Each move starts and stops smoothly.
 The sun direction and the ship position use the start position of the camera, so they do not
 change when the camera moves.
 
 ## Ship
 
-`src/main.ts` loads `lunarg-ship/lunarg_ship.glb` at startup.
+Each target loads `lunarg-ship/lunarg_ship.glb` at startup: the desktop target reads the file,
+and the browser target fetches it.
 The ship is `SHIP_DISTANCE` meters from the camera, on the center of the view.
 The ship stays level, and its front (+Z in the model) points along the camera heading.
 Thus the camera sees the engines at the back of the ship.

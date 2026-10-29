@@ -1,23 +1,16 @@
-// Render a terrain grid with WebGPU in an SDL window.
-// The camera does not move, and the terrain grid covers its view.
-// The terrain features move toward the camera.
-// The LunarG ship is in the center of the view and faces away from the camera.
+// The scene: a terrain with Perlin noise and craters, the LunarG ship, the sun, and the camera.
 // The camera follows a path that repeats: it moves around the ship to the left, then to the
-// right, and then back to the center.
-// Hold Space to run the ship engines. Press W to toggle between the solid and the wireframe
-// terrain. Press ESC to exit.
+// right, and then back to the center. The terrain features move toward the ship.
+//
+// This code uses only the standard WebGPU API, so the desktop target (src/desktop.ts) and the
+// browser target (src/browser.ts) both use it. Each target makes the GPU device, loads the ship
+// model, sends key events to the App, and calls App.frame() once for each frame.
 
-import { fileURLToPath } from 'node:url';
-import gpu from '@kmamal/gpu';
-import sdl from '@kmamal/sdl';
-import { loadGlb } from './gltf.js';
+import { type GltfModel } from './gltf.js';
 import { DirectionalLight } from './light.js';
 import { type Vec3, compose, lookAt, multiply, perspective, transformPoint, viewToWorldDirection } from './mat4.js';
 import { Ship } from './ship.js';
 import { TERRAIN_RADIUS, Terrain } from './terrain.js';
-
-const WIDTH = 1920;
-const HEIGHT = 1080;
 
 // All world units are meters. The camera is above the point (CAMERA_CORNER, CAMERA_CORNER), and
 // its heading is toward the origin. The terrain grid is a sector around the point below the camera.
@@ -31,11 +24,8 @@ const NEAR_PLANE = 1;
 // The terrain grid ends at TERRAIN_RADIUS, so the far plane does not need to be farther away.
 const FAR_PLANE = TERRAIN_RADIUS;
 
-// The window surface format. The default format of @kmamal/gpu is rgba16float, which changes
-// the brightness of the colors, so request an 8-bit format with no sRGB encoding.
-const SURFACE_FORMAT = 'bgra8unorm';
 // All pipelines that draw in the main render pass must use this depth format.
-const DEPTH_FORMAT = 'depth24plus';
+const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus';
 
 // The speed at which the terrain features move toward the camera, in meters per second.
 const TERRAIN_SPEED = 1200;
@@ -52,8 +42,6 @@ const SUN_VIEW_POSITION = [-9000, 9000 * Math.SQRT2, -9000] as const;
 const SUN_COLOR = [1.0, 1.0, 1.0] as const;
 const AMBIENT_COLOR = [0.0, 0.0, 0.0] as const;
 
-// The path is relative to this file, so it is correct from src/ (tsx) and from dist/ (tsc).
-const SHIP_MODEL_PATH = fileURLToPath(new URL('../lunarg-ship/lunarg_ship.glb', import.meta.url));
 // The distance from the camera to the center of the ship, along the center of the view.
 // The ship is 50 m tall, so at 250 m it fills approximately one quarter of the window height.
 const SHIP_DISTANCE = 250;
@@ -144,149 +132,96 @@ function computeProjection(aspect: number): Float32Array {
   return perspective(FIELD_OF_VIEW_Y, aspect, NEAR_PLANE, FAR_PLANE);
 }
 
-async function main(): Promise<void> {
-  const window = sdl.video.createWindow({
-    title: 'WebGPU Terrain',
-    width: WIDTH,
-    height: HEIGHT,
-    resizable: true,
-    webgpu: true,
-  });
+export class App {
+  private readonly device: GPUDevice;
+  private readonly terrain: Terrain;
+  private readonly ship: Ship;
+  private depthTexture: GPUTexture | null = null;
+  // The time in seconds since the first frame. The camera path uses it.
+  private elapsed = 0;
+  // worldPos moves forward along the start heading of the camera. The terrain samples its height
+  // field at worldPos, so the terrain features come toward the ship, but the ship does not move.
+  private readonly worldPos = [0, 0, 0];
 
-  const instance = gpu.create([]);
-  const adapter = await instance.requestAdapter();
-  if (!adapter) {
-    throw new Error('No WebGPU adapter is available');
+  // format is the format of the texture views that frame() draws into.
+  constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel) {
+    this.device = device;
+    // All objects in the scene use this one light.
+    const sun = new DirectionalLight(
+      device,
+      viewToWorldDirection(computeView(0), SUN_VIEW_POSITION),
+      SUN_COLOR,
+      AMBIENT_COLOR,
+    );
+    this.terrain = new Terrain(device, format, DEPTH_FORMAT, sun);
+    this.ship = new Ship(device, format, DEPTH_FORMAT, sun, shipModel);
+    placeShip(this.ship);
   }
-  const device = await adapter.requestDevice();
-  // The @kmamal/gpu types do not export GPUUncapturedErrorEvent, so get it from the module type.
-  device.addEventListener('uncapturederror', (event) => {
-    console.error('WebGPU error:', (event as typeof gpu.GPUUncapturedErrorEvent).error.message);
-  });
 
-  const renderer = gpu.renderGPUDeviceToWindow({ device, window, format: SURFACE_FORMAT });
+  // The engines run only while the target reports that Space is held down.
+  setEnginesOn(on: boolean): void {
+    this.ship.setEnginesOn(on);
+  }
 
-  // The pipelines must use the same format as the window surface.
-  const surfaceFormat = renderer.getPreferredFormat();
+  toggleTerrainRenderMode(): void {
+    this.terrain.setRenderMode(this.terrain.renderMode === 'solid' ? 'wireframe' : 'solid');
+  }
 
-  // All objects in the scene use this one light.
-  const sun = new DirectionalLight(
-    device,
-    viewToWorldDirection(computeView(0), SUN_VIEW_POSITION),
-    SUN_COLOR,
-    AMBIENT_COLOR,
-  );
-  const terrain = new Terrain(device, surfaceFormat, DEPTH_FORMAT, sun);
-  const ship = new Ship(device, surfaceFormat, DEPTH_FORMAT, sun, loadGlb(SHIP_MODEL_PATH));
-  placeShip(ship);
-
-  // The depth texture must have the same size as the window surface.
-  const createDepthTexture = () => {
-    const surface = renderer.getCurrentTexture();
-    return device.createTexture({
-      size: [surface.width, surface.height],
-      format: DEPTH_FORMAT,
-      usage: gpu.GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-  };
-  let depthTexture = createDepthTexture();
+  // Advance the scene by a time step in seconds, and draw it into colorView. width and height are
+  // the size of colorView in pixels.
+  frame(seconds: number, colorView: GPUTextureView, width: number, height: number): void {
+    this.elapsed += seconds;
+    this.updateCamera(width / height);
+    this.worldPos[0] += HEADING[0] * TERRAIN_SPEED * seconds;
+    this.worldPos[2] += HEADING[2] * TERRAIN_SPEED * seconds;
+    this.terrain.update([this.worldPos[0], this.worldPos[1], this.worldPos[2]]);
+    this.ship.update(seconds);
+    this.render(colorView, width, height);
+  }
 
   // Move the camera along its path. The terrain grid follows the camera, so that the grid always
   // covers the view.
-  const updateCamera = (seconds: number): void => {
-    const eye = cameraEye(cameraOrbitAngle(seconds));
+  private updateCamera(aspect: number): void {
+    const eye = cameraEye(cameraOrbitAngle(this.elapsed));
     const toShip = [SHIP_CENTER[0] - eye[0], 0, SHIP_CENTER[2] - eye[2]] as const;
     const length = Math.hypot(toShip[0], toShip[2]);
-    terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);
+    this.terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);
     const view = lookAt(eye, SHIP_CENTER, [0, 1, 0]);
-    const projection = computeProjection(window.pixelWidth / window.pixelHeight);
-    terrain.setViewProjection(multiply(projection, view));
-    ship.setCamera(view, projection);
-  };
+    const projection = computeProjection(aspect);
+    this.terrain.setViewProjection(multiply(projection, view));
+    this.ship.setCamera(view, projection);
+  }
 
-  const render = (): void => {
-    const encoder = device.createCommandEncoder();
+  private render(colorView: GPUTextureView, width: number, height: number): void {
+    // The depth texture must have the same size as the color texture.
+    if (!this.depthTexture || this.depthTexture.width !== width || this.depthTexture.height !== height) {
+      this.depthTexture?.destroy();
+      this.depthTexture = this.device.createTexture({
+        size: [width, height],
+        format: DEPTH_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+    }
+    const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
-          view: renderer.getCurrentTextureView(),
+          view: colorView,
           clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
           loadOp: 'clear',
           storeOp: 'store',
         },
       ],
       depthStencilAttachment: {
-        view: depthTexture.createView(),
+        view: this.depthTexture.createView(),
         depthClearValue: 1.0,
         depthLoadOp: 'clear',
         depthStoreOp: 'discard',
       },
     });
-    terrain.draw(pass);
-    ship.draw(pass);
+    this.terrain.draw(pass);
+    this.ship.draw(pass);
     pass.end();
-    device.queue.submit([encoder.finish()]);
-    renderer.swap();
-  };
-
-  window.on('resize', () => {
-    renderer.resize();
-    depthTexture.destroy();
-    depthTexture = createDepthTexture();
-  });
-
-  window.on('keyDown', (event) => {
-    if (event.repeat) {
-      return;
-    }
-    if (event.key === 'escape') {
-      window.destroy();
-    } else if (event.key === 'w') {
-      terrain.setRenderMode(terrain.renderMode === 'solid' ? 'wireframe' : 'solid');
-    } else if (event.key === ' ') {
-      ship.setEnginesOn(true);
-    }
-  });
-
-  // The engines run only while Space is held down.
-  window.on('keyUp', (event) => {
-    if (event.key === ' ') {
-      ship.setEnginesOn(false);
-    }
-  });
-  // The window does not get the key release if it is not in focus, so stop the engines.
-  window.on('blur', () => {
-    ship.setEnginesOn(false);
-  });
-
-  window.on('close', () => {
-    device.destroy();
-    // Exit now. If Node.js releases the Dawn objects in its normal shutdown,
-    // Dawn fails a RefCounted assertion and the process crashes.
-    process.exit(0);
-  });
-
-  // Move worldPos forward along the start heading of the camera. The terrain samples its height
-  // field at worldPos, so the terrain features come toward the ship, but the ship does not move.
-  const worldPos = [0, 0, 0];
-  const startTime = performance.now();
-  let previousTime = startTime;
-  while (!window.destroyed) {
-    const now = performance.now();
-    const seconds = (now - previousTime) / 1000;
-    previousTime = now;
-    updateCamera((now - startTime) / 1000);
-    worldPos[0] += HEADING[0] * TERRAIN_SPEED * seconds;
-    worldPos[2] += HEADING[2] * TERRAIN_SPEED * seconds;
-    terrain.update([worldPos[0], worldPos[1], worldPos[2]]);
-    ship.update(seconds);
-    render();
-    // Let Node.js process the window events between frames.
-    await new Promise((resolve) => setImmediate(resolve));
+    this.device.queue.submit([encoder.finish()]);
   }
 }
-
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});

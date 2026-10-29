@@ -2,7 +2,6 @@
 // Each object adds LIGHT_WGSL to its shader, adds the light bind group layout to its
 // pipeline layout at LIGHT_BIND_GROUP, and sets the light bind group before it draws.
 
-import gpu from '@kmamal/gpu';
 import type { Device, RenderPassEncoder } from './gpu-types.js';
 import type { Vec3 } from './mat4.js';
 
@@ -49,13 +48,13 @@ export class DirectionalLight {
     this.device = device;
     this.uniformBuffer = device.createBuffer({
       size: UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT,
-      usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.bindGroupLayout = device.createBindGroupLayout({
       entries: [
         {
           binding: 0,
-          visibility: gpu.GPUShaderStage.VERTEX | gpu.GPUShaderStage.FRAGMENT,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: 'uniform' },
         },
       ],

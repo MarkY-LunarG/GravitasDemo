@@ -3,8 +3,10 @@
 // attributes, 16-bit or 32-bit indices, morph targets, node TRS transforms, material base colors,
 // KHR_materials_unlit, and LINEAR animation channels. It throws an error for other features,
 // so that a model does not draw incorrectly without a message.
+//
+// parseGlb() reads the file contents from an ArrayBuffer, so it works on the desktop (Node.js)
+// and in a browser. The caller loads the file.
 
-import fs from 'node:fs';
 import type { Quat, Vec3 } from './mat4.js';
 
 export interface GltfMaterial {
@@ -139,22 +141,24 @@ const DEFAULT_MATERIAL: GltfMaterial = {
   doubleSided: false,
 };
 
-export function loadGlb(path: string): GltfModel {
-  const file = fs.readFileSync(path);
-  if (file.readUInt32LE(0) !== GLB_MAGIC || file.readUInt32LE(4) !== 2) {
-    throw new Error(`${path} is not a glTF 2.0 binary file`);
+export function parseGlb(data: ArrayBuffer): GltfModel {
+  const file = new DataView(data);
+  // GLB is little-endian.
+  const readUint32 = (offset: number) => file.getUint32(offset, true);
+  if (readUint32(0) !== GLB_MAGIC || readUint32(4) !== 2) {
+    throw new Error('The data is not a glTF 2.0 binary file');
   }
 
   // The JSON chunk is first, and the optional BIN chunk follows it.
-  const jsonLength = file.readUInt32LE(12);
-  if (file.readUInt32LE(16) !== CHUNK_JSON) {
-    throw new Error(`${path} does not start with a JSON chunk`);
+  const jsonLength = readUint32(12);
+  if (readUint32(16) !== CHUNK_JSON) {
+    throw new Error('The glTF binary file does not start with a JSON chunk');
   }
-  const json = JSON.parse(file.subarray(20, 20 + jsonLength).toString('utf8')) as Json;
+  const json = JSON.parse(new TextDecoder().decode(new Uint8Array(data, 20, jsonLength))) as Json;
   const binHeader = 20 + jsonLength;
-  let bin = Buffer.alloc(0);
-  if (binHeader + 8 <= file.length && file.readUInt32LE(binHeader + 4) === CHUNK_BIN) {
-    bin = file.subarray(binHeader + 8, binHeader + 8 + file.readUInt32LE(binHeader));
+  let bin = new Uint8Array(0);
+  if (binHeader + 8 <= data.byteLength && readUint32(binHeader + 4) === CHUNK_BIN) {
+    bin = new Uint8Array(data, binHeader + 8, readUint32(binHeader));
   }
 
   // Copy an accessor into a new typed array. The copy has the correct alignment for the type.

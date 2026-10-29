@@ -3,16 +3,22 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "start": "tsx src/main.ts",
+    "start": "tsx src/desktop.ts",
+    "desktop": "tsx src/desktop.ts",
+    "browser": "vite",
     "build": "tsc",
+    "build:browser": "vite build",
+    "preview:browser": "vite preview",
     "typecheck": "tsc --noEmit"
   },
   "license": "ISC",
   "type": "module",
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@webgpu/types": "^0.1.74",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
   },
   "private": true,
   "dependencies": {

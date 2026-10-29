@@ -7,7 +7,6 @@
 // light other objects. A glow sprite at each engine light gives a bloom effect: it is a quad that
 // faces the camera and adds a soft halo of the light color.
 
-import gpu from '@kmamal/gpu';
 import { type GltfAnimation, type GltfModel, type GltfPrimitive, sampleChannel } from './gltf.js';
 import type { DepthFormat, Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
 import { type DirectionalLight, LIGHT_WGSL } from './light.js';
@@ -240,7 +239,7 @@ type EngineState = 'off' | 'running' | 'shuttingDown';
 // Make a GPU buffer that contains data. The size of a buffer write must be a multiple of 4 bytes.
 function createBuffer(device: Device, data: ArrayBufferView, usage: number): Buffer {
   const size = Math.ceil(data.byteLength / 4) * 4;
-  const buffer = device.createBuffer({ size, usage: usage | gpu.GPUBufferUsage.COPY_DST });
+  const buffer = device.createBuffer({ size, usage: usage | GPUBufferUsage.COPY_DST });
   const padded = new Uint8Array(size);
   padded.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
   device.queue.writeBuffer(buffer, 0, padded);
@@ -321,17 +320,17 @@ export class Ship {
     }
     this.engineLightBuffer = device.createBuffer({
       size: this.engineLightData.byteLength,
-      usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     const drawLayout = device.createBindGroupLayout({
       entries: [
         {
           binding: 0,
-          visibility: gpu.GPUShaderStage.VERTEX | gpu.GPUShaderStage.FRAGMENT,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: 'uniform' },
         },
-        { binding: 1, visibility: gpu.GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
       ],
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [drawLayout, light.bindGroupLayout] });
@@ -352,13 +351,13 @@ export class Ship {
     // The glow sprites add light, and they do not write depth.
     const glowLayout = device.createBindGroupLayout({
       entries: [
-        { binding: 0, visibility: gpu.GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: gpu.GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
       ],
     });
     this.glowUniformBuffer = device.createBuffer({
       size: GLOW_UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT,
-      usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.glowBindGroup = device.createBindGroup({
       layout: glowLayout,
@@ -435,7 +434,7 @@ export class Ship {
         if (primitive.targets.length > MAX_MORPH_TARGETS) {
           throw new Error(`The ship shader supports at most ${MAX_MORPH_TARGETS} morph targets`);
         }
-        const vertex = gpu.GPUBufferUsage.VERTEX;
+        const vertex = GPUBufferUsage.VERTEX;
         let vertexData: Float32Array[];
         if (primitive.material.unlit) {
           const vertexCount = primitive.positions.length / 3;
@@ -451,7 +450,7 @@ export class Ship {
         }
         gpuPrimitive = {
           vertexBuffers: vertexData.map((data) => createBuffer(device, data, vertex)),
-          indexBuffer: createBuffer(device, primitive.indices, gpu.GPUBufferUsage.INDEX),
+          indexBuffer: createBuffer(device, primitive.indices, GPUBufferUsage.INDEX),
           indexFormat: primitive.indices instanceof Uint16Array ? 'uint16' : 'uint32',
           indexCount: primitive.indices.length,
         };
@@ -464,7 +463,7 @@ export class Ship {
       for (const primitive of node.mesh?.primitives ?? []) {
         const uniformBuffer = device.createBuffer({
           size: DRAW_UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT,
-          usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         const item: DrawItem = {
           node: nodeIndex,

@@ -11,7 +11,6 @@
 // The grid itself does not move. worldPos offsets the point where the vertex shader samples the
 // height field, so the terrain features move across the grid.
 
-import gpu from '@kmamal/gpu';
 import type { DepthFormat, Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
 import { type DirectionalLight, LIGHT_WGSL } from './light.js';
 import type { Mat4, Vec3 } from './mat4.js';
@@ -341,7 +340,7 @@ export class Terrain {
 
     this.uniformBuffer = device.createBuffer({
       size: UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT,
-      usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     // Two triangles for each grid cell. The rows go from the camera outward.
@@ -357,13 +356,13 @@ export class Terrain {
     }
     this.indexBuffer = device.createBuffer({
       size: indices.byteLength,
-      usage: gpu.GPUBufferUsage.INDEX | gpu.GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     });
     device.queue.writeBuffer(this.indexBuffer, 0, indices);
 
     // Both pipelines share one layout so that the same bind groups work for both.
     const bindGroupLayout = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: gpu.GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout, light.bindGroupLayout] });
     this.bindGroup = device.createBindGroup({
