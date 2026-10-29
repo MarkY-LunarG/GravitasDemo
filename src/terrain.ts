@@ -1,31 +1,42 @@
-// A square ground grid that draws as a solid surface or as a wireframe.
-// All world units are meters. The grid is centered on the origin, and its height comes from
-// Perlin noise and craters. The grid itself does not move. worldPos offsets the point where
-// the vertex shader samples the height field, so the terrain features move across the grid.
+// A ground grid that draws as a solid surface or as a wireframe.
+// All world units are meters. The height of the ground comes from Perlin noise and craters.
+//
+// The grid is a sector of rings around the point below the camera, and it covers the view of the
+// camera. The columns are at equal angles, and the radius of each row is GRID_RING_RATIO times the
+// radius of the row before it. Thus a cell has approximately the same size on the screen at all
+// distances: near cells are small and far cells are large. The grid is correct only for a camera
+// that stays at the grid center, and looks along the grid heading.
+//
+// The grid itself does not move. worldPos offsets the point where the vertex shader samples the
+// height field, so the terrain features move across the grid.
 
 import gpu from '@kmamal/gpu';
 import type { DepthFormat, Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
 import { type DirectionalLight, LIGHT_WGSL } from './light.js';
-import { type Mat4, type Vec3, multiply, translationScale } from './mat4.js';
+import type { Mat4, Vec3 } from './mat4.js';
 
 export type TerrainRenderMode = 'solid' | 'wireframe';
 
-// The length of one side of the square grid, in meters.
-export const TERRAIN_EXTENT = 25000;
+// The distance from the grid center to the last ring, in meters.
+export const TERRAIN_RADIUS = 20000;
+// The distance from the grid center to the first ring. Hills near the camera can hide the ground
+// below them, so the first ring is nearer than the bottom edge of the view.
+const GRID_NEAR = 100;
+// The grid covers GRID_HALF_ANGLE to each side of the heading. The horizontal field of view of
+// a 45-degree vertical field of view at 16:9 is approximately 36 degrees to each side.
+const GRID_HALF_ANGLE = (50 * Math.PI) / 180;
+// Approximately 2.7 pixels for each column at 1920 x 1080 with a 45-degree vertical field of view.
+const GRID_COLUMNS = 900;
+const GRID_ROWS = 600;
+const GRID_RING_RATIO = (TERRAIN_RADIUS / GRID_NEAR) ** (1 / (GRID_ROWS - 1));
 
-const GRID_POINTS = 5000;
-const HALF_EXTENT = TERRAIN_EXTENT / 2;
-
-const CELLS_PER_ROW = GRID_POINTS - 1;
-// The solid terrain is one triangle strip for each row of cells. Each strip has two vertices
-// for each grid point in the row. Thus the vertex shader runs only twice for each grid point.
-//
-// The depth test gives the correct result in all draw orders. The rows draw from the camera
-// corner (-X -Z) outward, so near terrain usually draws first. Then the GPU can skip the
-// fragment shader (and its shadow ray) for far terrain that near terrain hides.
-const STRIP_VERTEX_COUNT = GRID_POINTS * 2;
-// Each grid line along X and along Z is made of CELLS_PER_ROW segments of two vertices.
-const WIRE_VERTEX_COUNT = 2 * GRID_POINTS * CELLS_PER_ROW * 2;
+// The solid terrain is an indexed triangle list. The GPU keeps recent vertex shader results,
+// so it runs the vertex shader approximately once for each grid point.
+// The rows draw from the camera outward, so near terrain usually draws first. Then the depth test
+// prevents the fragment shader from running for far terrain that near terrain hides.
+const SOLID_INDEX_COUNT = (GRID_ROWS - 1) * (GRID_COLUMNS - 1) * 6;
+// Each ring has GRID_COLUMNS - 1 segments, and each column line has GRID_ROWS - 1 segments.
+const WIRE_VERTEX_COUNT = 2 * (GRID_ROWS * (GRID_COLUMNS - 1) + GRID_COLUMNS * (GRID_ROWS - 1));
 
 // Perlin noise (fractal Brownian motion) for the hills.
 // Each octave has double the frequency and half the amplitude of the octave before it.
@@ -39,14 +50,14 @@ const NOISE_OCTAVES = 6;
 // craters is not constant. A crater has an effect to 2 * radius from its center. The maximum
 // radius must be no more than 0.25 of the cell size, because the shader looks only at the
 // 2 x 2 cells nearest to the point.
-const LARGE_CRATER_CELL = 8000;
+const LARGE_CRATER_CELL = 2000;
 const LARGE_CRATER_PROBABILITY = 0.1;
-const LARGE_CRATER_RADIUS = [250, 1500] as const;
+const LARGE_CRATER_RADIUS = [500, 1000] as const;
 const SMALL_CRATER_CELL = 800;
 const SMALL_CRATER_PROBABILITY = 0.35;
 const SMALL_CRATER_RADIUS = [30, 140] as const;
 
-// Cast shadows. The fragment shader sends a ray from the surface toward the sun, and
+// Cast shadows. The vertex shader sends a ray from each grid point toward the sun, and
 // samples the height field at steps along the ray. Each step is SHADOW_STEP_GROWTH times
 // longer than the step before it, so near steps are short and far steps are long.
 // SHADOW_SOFTNESS sets the width of the soft edge: larger values give sharper shadows.
@@ -57,18 +68,20 @@ const SHADOW_FIRST_STEP = 4;
 const SHADOW_STEP_GROWTH = 1.35;
 const SHADOW_SOFTNESS = 16;
 const SHADOW_OCTAVES = 3;
+// The fragment shader interpolates the result between the grid points.
 // The ray stops when it is higher than all terrain. This is an approximate upper limit:
 // the noise is at most 2 * NOISE_AMPLITUDE and a crater rim is at most 0.06 * radius.
 const MAX_TERRAIN_HEIGHT = 2 * NOISE_AMPLITUDE + 0.06 * LARGE_CRATER_RADIUS[1];
 
-// The vertex shaders make the grid positions from the vertex index, so no vertex or
-// index buffers are necessary. Grid coordinates are in [0, 1] and the model matrix
-// moves them into world space.
+// The vertex shaders make the grid positions from the vertex index, so no vertex buffers are
+// necessary.
 const SHADER = /* wgsl */ `
 ${LIGHT_WGSL}
-const CELLS_PER_ROW: u32 = ${CELLS_PER_ROW}u;
-const GRID_POINTS: u32 = ${GRID_POINTS}u;
-const TERRAIN_EXTENT: f32 = ${TERRAIN_EXTENT}.0;
+const GRID_COLUMNS: u32 = ${GRID_COLUMNS}u;
+const GRID_ROWS: u32 = ${GRID_ROWS}u;
+const GRID_NEAR: f32 = ${GRID_NEAR}.0;
+const GRID_HALF_ANGLE: f32 = ${GRID_HALF_ANGLE};
+const GRID_RING_RATIO: f32 = ${GRID_RING_RATIO};
 const NOISE_FREQUENCY: f32 = ${1 / NOISE_WAVELENGTH};
 const NOISE_AMPLITUDE: f32 = ${NOISE_AMPLITUDE}.0;
 const NOISE_OCTAVES: u32 = ${NOISE_OCTAVES}u;
@@ -80,8 +93,12 @@ const SHADOW_SOFTNESS: f32 = ${SHADOW_SOFTNESS}.0;
 const MAX_TERRAIN_HEIGHT: f32 = ${MAX_TERRAIN_HEIGHT};
 
 struct Uniforms {
-  mvp: mat4x4f,
+  viewProjection: mat4x4f,
   worldPos: vec3f,
+  // The angle of the grid heading from +Z toward +X.
+  gridYaw: f32,
+  // The world X and Z of the grid center.
+  gridCenter: vec2f,
 }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -89,8 +106,14 @@ struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) worldNormal: vec3f,
   @location(1) height: f32,
-  // The position in the height field, which includes worldPos.
-  @location(2) sampleXZ: vec2f,
+  @location(2) sunVisibility: f32,
+}
+
+// The weight of a feature of a given size on a grid with a given cell size. Features smaller than
+// approximately 4 cells fade out, and features smaller than 2 cells are removed. Without this, far
+// features that are smaller than a cell would flicker as the terrain moves.
+fn detail(featureSize: f32, cellSize: f32) -> f32 {
+  return saturate(featureSize / cellSize * 0.5 - 1.0);
 }
 
 // An integer hash of a cell and a seed. Different seeds give values that are not related.
@@ -137,12 +160,17 @@ fn perlin(p: vec2f, seed: u32) -> vec3f {
   return vec3f(value, gradient);
 }
 
-fn hills(p: vec2f, octaves: u32) -> vec3f {
+fn hills(p: vec2f, octaves: u32, cellSize: f32) -> vec3f {
   var sum = vec3f(0.0);
   var frequency = NOISE_FREQUENCY;
   var amplitude = NOISE_AMPLITUDE;
   for (var octave = 0u; octave < octaves; octave++) {
-    let n = perlin(p * frequency, octave);
+    let weight = detail(1.0 / frequency, cellSize);
+    // The octaves after this one are smaller, so they also have a weight of 0.
+    if (weight <= 0.0) {
+      break;
+    }
+    let n = perlin(p * frequency, octave) * weight;
     sum += vec3f(n.x * amplitude, n.yz * amplitude * frequency);
     frequency *= 2.0;
     amplitude *= 0.5;
@@ -175,7 +203,10 @@ fn crater(p: vec2f, center: vec2f, radius: f32) -> vec3f {
 }
 
 fn craterLayer(p: vec2f, cellSize: f32, probability: f32, minRadius: f32, maxRadius: f32,
-               seed: u32) -> vec3f {
+               seed: u32, gridCellSize: f32) -> vec3f {
+  if (detail(2.0 * maxRadius, gridCellSize) <= 0.0) {
+    return vec3f(0.0);
+  }
   // The 2 x 2 block of cells whose centers are nearest to p.
   let first = vec2i(floor(p / cellSize - 0.5));
   var sum = vec3f(0.0);
@@ -191,63 +222,28 @@ fn craterLayer(p: vec2f, cellSize: f32, probability: f32, minRadius: f32, maxRad
       }
       let radius = mix(minRadius, maxRadius, values.y);
       let center = (vec2f(cell) + values.zw) * cellSize;
-      sum += crater(p, center, radius);
+      sum += crater(p, center, radius) * detail(2.0 * radius, gridCellSize);
     }
   }
   return sum;
 }
 
-fn terrainHeight(p: vec2f, octaves: u32) -> vec3f {
-  return hills(p, octaves)
+// cellSize is the size of a grid cell at p. Features that are small relative to it fade out.
+fn terrainHeight(p: vec2f, octaves: u32, cellSize: f32) -> vec3f {
+  return hills(p, octaves, cellSize)
     + craterLayer(p, ${LARGE_CRATER_CELL}.0, ${LARGE_CRATER_PROBABILITY}, ${LARGE_CRATER_RADIUS[0]}.0,
-                  ${LARGE_CRATER_RADIUS[1]}.0, 100u)
+                  ${LARGE_CRATER_RADIUS[1]}.0, 100u, cellSize)
     + craterLayer(p, ${SMALL_CRATER_CELL}.0, ${SMALL_CRATER_PROBABILITY}, ${SMALL_CRATER_RADIUS[0]}.0,
-                  ${SMALL_CRATER_RADIUS[1]}.0, 200u);
-}
-
-fn makeVertex(column: u32, row: u32) -> VertexOutput {
-  let gridCoord = vec2f(f32(column), f32(row)) / f32(CELLS_PER_ROW);
-  // The model matrix maps grid coordinates to world X and Z, and it does not scale Y.
-  // Thus the height and the normal can stay in meters in world space.
-  let gridWorld = (gridCoord - 0.5) * TERRAIN_EXTENT;
-  let sampleXZ = gridWorld + uniforms.worldPos.xz;
-  let terrain = terrainHeight(sampleXZ, NOISE_OCTAVES);
-  var output: VertexOutput;
-  output.position = uniforms.mvp * vec4f(gridCoord.x, terrain.x, gridCoord.y, 1.0);
-  output.worldNormal = normalize(vec3f(-terrain.y, 1.0, -terrain.z));
-  output.height = terrain.x;
-  output.sampleXZ = sampleXZ;
-  return output;
-}
-
-// One instance for each row of cells. The strip goes along the row and alternates between the
-// two grid lines at the edges of the row.
-@vertex
-fn vs_solid(@builtin(vertex_index) index: u32, @builtin(instance_index) row: u32) -> VertexOutput {
-  return makeVertex(index / 2u, row + index % 2u);
-}
-
-@vertex
-fn vs_wire(@builtin(vertex_index) index: u32) -> VertexOutput {
-  let segmentsPerDirection = GRID_POINTS * CELLS_PER_ROW;
-  var segment = index / 2u;
-  let end = index % 2u;
-  if (segment < segmentsPerDirection) {
-    // Lines along X.
-    return makeVertex(segment % CELLS_PER_ROW + end, segment / CELLS_PER_ROW);
-  }
-  // Lines along Z.
-  segment -= segmentsPerDirection;
-  return makeVertex(segment / CELLS_PER_ROW, segment % CELLS_PER_ROW + end);
+                  ${SMALL_CRATER_RADIUS[1]}.0, 200u, cellSize);
 }
 
 // The fraction of the sun that a surface point can see, from 0 to 1.
 // Where the terrain is above the ray toward the sun, the point is in shadow. Where the terrain is
 // a short distance below the ray, the point is in the soft edge of a shadow.
-fn sunVisibility(sampleXZ: vec2f) -> f32 {
+fn sunVisibility(sampleXZ: vec2f, cellSize: f32) -> f32 {
   // The ray starts on the same simplified surface that it tests against. A small offset above
   // that surface prevents the surface from shadowing itself.
-  let startHeight = terrainHeight(sampleXZ, SHADOW_OCTAVES).x;
+  let startHeight = terrainHeight(sampleXZ, SHADOW_OCTAVES, cellSize).x;
   let origin = vec3f(sampleXZ.x, startHeight + 0.5, sampleXZ.y);
   var visibility = 1.0;
   var t = SHADOW_FIRST_STEP;
@@ -256,7 +252,7 @@ fn sunVisibility(sampleXZ: vec2f) -> f32 {
     if (ray.y > MAX_TERRAIN_HEIGHT) {
       break;
     }
-    let clearance = ray.y - terrainHeight(ray.xz, SHADOW_OCTAVES).x;
+    let clearance = ray.y - terrainHeight(ray.xz, SHADOW_OCTAVES, cellSize).x;
     visibility = min(visibility, SHADOW_SOFTNESS * clearance / t);
     if (visibility <= 0.0) {
       return 0.0;
@@ -266,16 +262,52 @@ fn sunVisibility(sampleXZ: vec2f) -> f32 {
   return visibility;
 }
 
+// The wireframe does not use the light, so it does not need the shadow ray.
+fn makeVertex(column: u32, row: u32, withShadow: bool) -> VertexOutput {
+  let radius = GRID_NEAR * pow(GRID_RING_RATIO, f32(row));
+  // The distance to the next ring. It is larger than the distance to the next column.
+  let cellSize = radius * (GRID_RING_RATIO - 1.0);
+  let angle = uniforms.gridYaw + (f32(column) / f32(GRID_COLUMNS - 1u) * 2.0 - 1.0) * GRID_HALF_ANGLE;
+  let gridXZ = uniforms.gridCenter + radius * vec2f(sin(angle), cos(angle));
+  let sampleXZ = gridXZ + uniforms.worldPos.xz;
+  let terrain = terrainHeight(sampleXZ, NOISE_OCTAVES, cellSize);
+  var output: VertexOutput;
+  output.position = uniforms.viewProjection * vec4f(gridXZ.x, terrain.x, gridXZ.y, 1.0);
+  output.worldNormal = normalize(vec3f(-terrain.y, 1.0, -terrain.z));
+  output.height = terrain.x;
+  // A surface that faces away from the sun gets only ambient light, so it needs no shadow ray.
+  output.sunVisibility = 0.0;
+  if (withShadow && dot(output.worldNormal, light.direction) > 0.0) {
+    output.sunVisibility = sunVisibility(sampleXZ, cellSize);
+  }
+  return output;
+}
+
+// The index buffer gives the vertex index of each triangle corner: row * GRID_COLUMNS + column.
+@vertex
+fn vs_solid(@builtin(vertex_index) index: u32) -> VertexOutput {
+  return makeVertex(index % GRID_COLUMNS, index / GRID_COLUMNS, true);
+}
+
+@vertex
+fn vs_wire(@builtin(vertex_index) index: u32) -> VertexOutput {
+  let ringSegments = GRID_ROWS * (GRID_COLUMNS - 1u);
+  var segment = index / 2u;
+  let end = index % 2u;
+  if (segment < ringSegments) {
+    // Lines along the rings.
+    return makeVertex(segment % (GRID_COLUMNS - 1u) + end, segment / (GRID_COLUMNS - 1u), false);
+  }
+  // Lines from the center outward.
+  segment -= ringSegments;
+  return makeVertex(segment / (GRID_ROWS - 1u), segment % (GRID_ROWS - 1u) + end, false);
+}
+
 @fragment
 fn fs_solid(input: VertexOutput) -> @location(0) vec4f {
   // Low ground is darker than high ground.
   let shade = mix(0.3, 0.55, saturate(input.height / 400.0 + 0.5));
-  // A surface that faces away from the sun gets only ambient light, so it needs no shadow ray.
-  var visibility = 0.0;
-  if (dot(input.worldNormal, light.direction) > 0.0) {
-    visibility = sunVisibility(input.sampleXZ);
-  }
-  return vec4f(applyShadowedLight(vec3f(shade, shade, shade), input.worldNormal, visibility), 1.0);
+  return vec4f(applyShadowedLight(vec3f(shade, shade, shade), input.worldNormal, input.sunVisibility), 1.0);
 }
 
 @fragment
@@ -284,6 +316,12 @@ fn fs_wire(input: VertexOutput) -> @location(0) vec4f {
 }
 `;
 
+// The float offsets in the Uniforms struct: viewProjection (16 floats), worldPos (3), gridYaw (1),
+// and gridCenter (2). The struct size is a multiple of 16 bytes.
+const WORLD_POS_OFFSET = 16;
+const GRID_YAW_OFFSET = 19;
+const UNIFORM_FLOATS = 24;
+
 export class Terrain {
   private readonly device: Device;
   private readonly light: DirectionalLight;
@@ -291,20 +329,36 @@ export class Terrain {
   private readonly bindGroup;
   private readonly solidPipeline;
   private readonly wirePipeline;
-  private readonly modelMatrix: Mat4;
+  private readonly indexBuffer;
   private worldPosition: Vec3;
   private mode: TerrainRenderMode = 'solid';
 
   constructor(device: Device, format: TextureFormat, depthFormat: DepthFormat, light: DirectionalLight) {
     this.device = device;
     this.light = light;
-    this.modelMatrix = translationScale([-HALF_EXTENT, 0, -HALF_EXTENT], [TERRAIN_EXTENT, 1, TERRAIN_EXTENT]);
     this.worldPosition = [0, 0, 0];
 
     this.uniformBuffer = device.createBuffer({
-      size: 20 * Float32Array.BYTES_PER_ELEMENT,
+      size: UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT,
       usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
     });
+
+    // Two triangles for each grid cell. The rows go from the camera outward.
+    const indices = new Uint32Array(SOLID_INDEX_COUNT);
+    let next = 0;
+    for (let row = 0; row < GRID_ROWS - 1; ++row) {
+      for (let column = 0; column < GRID_COLUMNS - 1; ++column) {
+        const near = row * GRID_COLUMNS + column;
+        const far = near + GRID_COLUMNS;
+        indices.set([near, near + 1, far, far, near + 1, far + 1], next);
+        next += 6;
+      }
+    }
+    this.indexBuffer = device.createBuffer({
+      size: indices.byteLength,
+      usage: gpu.GPUBufferUsage.INDEX | gpu.GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(this.indexBuffer, 0, indices);
 
     // Both pipelines share one layout so that the same bind groups work for both.
     const bindGroupLayout = device.createBindGroupLayout({
@@ -322,7 +376,7 @@ export class Terrain {
       layout: pipelineLayout,
       vertex: { module: shaderModule, entryPoint: 'vs_solid' },
       fragment: { module: shaderModule, entryPoint: 'fs_solid', targets: [{ format }] },
-      primitive: { topology: 'triangle-strip' },
+      primitive: { topology: 'triangle-list' },
       depthStencil,
     });
     this.wirePipeline = device.createRenderPipeline({
@@ -342,10 +396,19 @@ export class Terrain {
     this.mode = mode;
   }
 
-  // Combine the camera view-projection matrix with the terrain model matrix.
+  // The grid vertices are in world space, so the terrain needs no model matrix.
   setViewProjection(viewProjection: Mat4): void {
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, multiply(viewProjection, this.modelMatrix));
-    this.writeWorldPosition();
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, viewProjection);
+  }
+
+  // Put the grid center below the camera, and turn the grid to the horizontal camera heading.
+  // Only X and Z of position and heading are used.
+  setGridCenter(position: Vec3, heading: Vec3): void {
+    this.device.queue.writeBuffer(
+      this.uniformBuffer,
+      GRID_YAW_OFFSET * Float32Array.BYTES_PER_ELEMENT,
+      new Float32Array([Math.atan2(heading[0], heading[2]), position[0], position[2]]),
+    );
   }
 
   // Set the point of the height field that is at the center of the grid. Only X and Z are used.
@@ -355,11 +418,10 @@ export class Terrain {
     this.writeWorldPosition();
   }
 
-  // worldPos follows the 64-byte mvp matrix in the Uniforms struct.
   private writeWorldPosition(): void {
     this.device.queue.writeBuffer(
       this.uniformBuffer,
-      16 * Float32Array.BYTES_PER_ELEMENT,
+      WORLD_POS_OFFSET * Float32Array.BYTES_PER_ELEMENT,
       new Float32Array(this.worldPosition),
     );
   }
@@ -372,7 +434,8 @@ export class Terrain {
       pass.draw(WIRE_VERTEX_COUNT);
     } else {
       pass.setPipeline(this.solidPipeline);
-      pass.draw(STRIP_VERTEX_COUNT, CELLS_PER_ROW);
+      pass.setIndexBuffer(this.indexBuffer, 'uint32');
+      pass.drawIndexed(SOLID_INDEX_COUNT);
     }
   }
 }

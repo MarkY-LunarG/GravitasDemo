@@ -52,7 +52,13 @@ export class DirectionalLight {
       usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
     });
     this.bindGroupLayout = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: gpu.GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
+      entries: [
+        {
+          binding: 0,
+          visibility: gpu.GPUShaderStage.VERTEX | gpu.GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform' },
+        },
+      ],
     });
     this.bindGroup = device.createBindGroup({
       layout: this.bindGroupLayout,

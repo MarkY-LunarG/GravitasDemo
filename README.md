@@ -2,7 +2,7 @@
 
 This application renders a terrain grid with WebGPU in Node.js.
 It shows the grid in an SDL window.
-The camera is above one corner of the grid, faces the center, and tilts down.
+The camera is 500 m above the ground and tilts down.
 The camera does not move, but the hills and craters move toward it.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
@@ -99,14 +99,27 @@ The vertex shader calculates the height of each grid point from two parts:
 The `_CRATER_` and `NOISE_` constants at the top of `src/terrain.ts` control these parts.
 The shader also calculates the slope of the height, and uses it for the normal.
 
+The grid is a sector of rings around the point below the camera, and it covers the view of the
+camera.
+The columns are at equal angles, and the radius of each ring is a fixed ratio larger than the
+radius of the ring before it.
+Thus a cell has approximately the same size on the screen at all distances, approximately 3
+pixels wide at 1920 x 1080.
+`GRID_COLUMNS`, `GRID_ROWS`, `GRID_NEAR`, `GRID_HALF_ANGLE`, and `TERRAIN_RADIUS` at the top of
+`src/terrain.ts` set the shape of the grid.
+`Terrain.setGridCenter()` puts the grid below the camera and turns it to the camera heading.
+The grid is correct only for a camera that does not move.
+
+Far cells are large, so the shader removes noise octaves and craters that are smaller than
+approximately 4 cells.
+Without this, the small features would flicker as the terrain moves.
+
 The grid does not move.
-`Terrain.update()` sets `worldPos`, the point of the height field that is at the grid center.
+`Terrain.update()` sets `worldPos`, an offset that the shader adds to each grid point before it
+samples the height field.
 Each frame, `src/main.ts` moves `worldPos` along the camera heading at `TERRAIN_SPEED` meters
 per second.
 Thus the terrain features come toward the camera.
-
-The vertex shader runs two times for each grid point in each frame.
-Thus `GRID_POINTS` has a large effect on the frame rate.
 
 ## Lighting
 
@@ -119,14 +132,14 @@ The solid terrain uses diffuse (Lambert) lighting with an ambient term.
 The wireframe terrain does not use the light.
 
 The terrain also casts shadows.
-For each pixel, the fragment shader sends a ray toward the sun and samples the height field at
+For each grid point, the vertex shader sends a ray toward the sun and samples the height field at
 `SHADOW_STEPS` points along the ray.
-Where the terrain is above the ray, the pixel gets only ambient light.
-Where the terrain is a short distance below the ray, the pixel is in the soft edge of a shadow.
+Where the terrain is above the ray, the grid point gets only ambient light.
+Where the terrain is a short distance below the ray, the grid point is in the soft edge of a
+shadow.
+The fragment shader interpolates the result between the grid points.
 To save time, the rays use only the first `SHADOW_OCTAVES` octaves of the noise.
 The `SHADOW_` constants at the top of `src/terrain.ts` control the rays.
-The shadow rays are expensive, so the render pass has a depth buffer.
-With the depth test, the GPU does not run the fragment shader for most hidden terrain.
 
 To light a new object with the same sun:
 

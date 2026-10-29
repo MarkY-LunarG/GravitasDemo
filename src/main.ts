@@ -1,5 +1,5 @@
 // Render a terrain grid with WebGPU in an SDL window.
-// The camera stays above one corner and looks toward the center of the grid.
+// The camera does not move, and the terrain grid covers its view.
 // The terrain features move toward the camera.
 // The LunarG ship is in the center of the view and faces away from the camera.
 // Hold Space to run the ship engines. Press W to toggle between the solid and the wireframe
@@ -12,21 +12,22 @@ import { loadGlb } from './gltf.js';
 import { DirectionalLight } from './light.js';
 import { compose, lookAt, multiply, perspective, transformPoint, viewToWorldDirection } from './mat4.js';
 import { Ship } from './ship.js';
-import { TERRAIN_EXTENT, Terrain } from './terrain.js';
+import { TERRAIN_RADIUS, Terrain } from './terrain.js';
 
 const WIDTH = 1920;
 const HEIGHT = 1080;
 
-// All world units are meters. The terrain is on the Y = 0 plane, centered on the origin.
-const CAMERA_CORNER = -TERRAIN_EXTENT / 2;
+// All world units are meters. The camera is above the point (CAMERA_CORNER, CAMERA_CORNER), and
+// its heading is toward the origin. The terrain grid is a sector around the point below the camera.
+const CAMERA_CORNER = -12500;
 const EYE_HEIGHT = 500;
-// The camera looks horizontally toward the center of the terrain, then tilts down by this angle.
+// The camera looks horizontally toward the origin, then tilts down by this angle.
 // At -10 degrees, the terrain fills approximately the bottom two thirds of the window.
 const CAMERA_PITCH = (-10 * Math.PI) / 180;
 const FIELD_OF_VIEW_Y = (45 * Math.PI) / 180;
 const NEAR_PLANE = 1;
-// The far plane clips the terrain at 20 km. The far corner of the terrain is farther away.
-const FAR_PLANE = 20000;
+// The terrain grid ends at TERRAIN_RADIUS, so the far plane does not need to be farther away.
+const FAR_PLANE = TERRAIN_RADIUS;
 
 // The window surface format. The default format of @kmamal/gpu is rgba16float, which changes
 // the brightness of the colors, so request an 8-bit format with no sRGB encoding.
@@ -56,11 +57,11 @@ const SHIP_MODEL_PATH = fileURLToPath(new URL('../lunarg-ship/lunarg_ship.glb', 
 const SHIP_DISTANCE = 250;
 
 const EYE = [CAMERA_CORNER, EYE_HEIGHT, CAMERA_CORNER] as const;
-// The horizontal unit vector from the camera toward the center of the terrain.
+// The horizontal unit vector from the camera toward the origin.
 const HEADING = [-EYE[0] / Math.hypot(EYE[0], EYE[2]), 0, -EYE[2] / Math.hypot(EYE[0], EYE[2])] as const;
 
-// The unit vector along the center of the view. The heading is toward the center of the terrain,
-// and the pitch tilts it up or down.
+// The unit vector along the center of the view. The heading is toward the origin, and the pitch
+// tilts it up or down.
 function viewDirection(pitch: number): readonly [number, number, number] {
   return [HEADING[0] * Math.cos(pitch), Math.sin(pitch), HEADING[2] * Math.cos(pitch)];
 }
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
     AMBIENT_COLOR,
   );
   const terrain = new Terrain(device, surfaceFormat, DEPTH_FORMAT, sun);
+  terrain.setGridCenter(EYE, HEADING);
   const ship = new Ship(device, surfaceFormat, DEPTH_FORMAT, sun, loadGlb(SHIP_MODEL_PATH));
   placeShip(ship);
 
