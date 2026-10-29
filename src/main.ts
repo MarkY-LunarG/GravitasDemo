@@ -1,5 +1,6 @@
-// Render a flat terrain grid with WebGPU in an SDL window.
-// The camera is above one corner and looks toward the center of the grid.
+// Render a terrain grid with WebGPU in an SDL window.
+// The camera stays above one corner and looks toward the center of the grid.
+// The terrain features move toward the camera.
 // Press W to toggle between the solid and the wireframe terrain. Press ESC to exit.
 
 import gpu from '@kmamal/gpu';
@@ -12,29 +13,45 @@ const WIDTH = 1920;
 const HEIGHT = 1080;
 
 // All world units are meters. The terrain is on the Y = 0 plane, centered on the origin.
-const CAMERA_CORNER = -TERRAIN_EXTENT / 2 - 100;
-const EYE_HEIGHT = 300;
-const TARGET_HEIGHT = 300;
+const CAMERA_CORNER = -TERRAIN_EXTENT / 2;
+const EYE_HEIGHT = 500;
+// The camera looks horizontally toward the center of the terrain, then tilts down by this angle.
+// At -10 degrees, the terrain fills approximately the bottom two thirds of the window.
+const CAMERA_PITCH = (-10 * Math.PI) / 180;
 const FIELD_OF_VIEW_Y = (45 * Math.PI) / 180;
 const NEAR_PLANE = 1;
-const FAR_PLANE = 5000;
+// The far plane clips the terrain at 20 km. The far corner of the terrain is farther away.
+const FAR_PLANE = 20000;
 
-// The sun is a directional light. This is the sun position in view space, where the camera
-// is at the origin and looks along -Z, +X is to the right, and +Y is up.
+// The speed at which the terrain features move toward the camera, in meters per second.
+const TERRAIN_SPEED = 1200;
+
+// The sun is a directional light. This is the sun position in the view space of a level camera
+// (pitch 0), where the camera is at the origin and looks along -Z, +X is to the right, and +Y is up.
+// The level view keeps the sun 45 degrees above the horizon for all values of CAMERA_PITCH.
 // The sun is in front of the camera, 45 degrees to the left of the view direction, and
 // 45 degrees above the horizon: the height is equal to the horizontal distance, 9000 * sqrt(2).
 // Only the direction to this point is important, because the sun is infinitely far away.
 const SUN_VIEW_POSITION = [-9000, 9000 * Math.SQRT2, -9000] as const;
-const SUN_COLOR = [1.0, 0.95, 0.85] as const;
-const AMBIENT_COLOR = [0.25, 0.27, 0.32] as const;
+// A bright sun and a dim ambient term give high contrast: slopes that face away from the sun
+// are dark. Increase AMBIENT_COLOR for softer shadows.
+const SUN_COLOR = [1.0, 1.0, 1.0] as const;
+const AMBIENT_COLOR = [0.0, 0.0, 0.0] as const;
 
-function computeView(): Float32Array {
-  return lookAt([CAMERA_CORNER, EYE_HEIGHT, CAMERA_CORNER], [0, TARGET_HEIGHT, 0], [0, 1, 0]);
+const EYE = [CAMERA_CORNER, EYE_HEIGHT, CAMERA_CORNER] as const;
+// The horizontal unit vector from the camera toward the center of the terrain.
+const HEADING = [-EYE[0] / Math.hypot(EYE[0], EYE[2]), 0, -EYE[2] / Math.hypot(EYE[0], EYE[2])] as const;
+
+// The camera heading is toward the center of the terrain. The pitch tilts it up or down.
+function computeView(pitch: number): Float32Array {
+  const eye = EYE;
+  const forward = [HEADING[0] * Math.cos(pitch), Math.sin(pitch), HEADING[2] * Math.cos(pitch)] as const;
+  return lookAt(eye, [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]], [0, 1, 0]);
 }
 
 function computeViewProjection(aspect: number): Float32Array {
   const projection = perspective(FIELD_OF_VIEW_Y, aspect, NEAR_PLANE, FAR_PLANE);
-  return multiply(projection, computeView());
+  return multiply(projection, computeView(CAMERA_PITCH));
 }
 
 async function main(): Promise<void> {
@@ -65,7 +82,7 @@ async function main(): Promise<void> {
   // All objects in the scene use this one light.
   const sun = new DirectionalLight(
     device,
-    viewToWorldDirection(computeView(), SUN_VIEW_POSITION),
+    viewToWorldDirection(computeView(0), SUN_VIEW_POSITION),
     SUN_COLOR,
     AMBIENT_COLOR,
   );
@@ -81,7 +98,7 @@ async function main(): Promise<void> {
       colorAttachments: [
         {
           view: renderer.getCurrentTextureView(),
-          clearValue: { r: 0.0, g: 0.0, b: 1.0, a: 1.0 },
+          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
           loadOp: 'clear',
           storeOp: 'store',
         },
@@ -93,12 +110,9 @@ async function main(): Promise<void> {
     renderer.swap();
   };
 
-  // The scene is static, so draw only when the window contents become invalid.
-  window.on('expose', render);
   window.on('resize', () => {
     renderer.resize();
     updateCamera();
-    render();
   });
 
   window.on('keyDown', (event) => {
@@ -109,7 +123,6 @@ async function main(): Promise<void> {
       window.destroy();
     } else if (event.key === 'w') {
       terrain.setRenderMode(terrain.renderMode === 'solid' ? 'wireframe' : 'solid');
-      render();
     }
   });
 
@@ -122,7 +135,22 @@ async function main(): Promise<void> {
   });
 
   updateCamera();
-  render();
+
+  // Move worldPos forward along the camera heading. The terrain samples its height field at
+  // worldPos, so the terrain features come toward the camera, but the camera does not move.
+  const worldPos = [0, 0, 0];
+  let previousTime = performance.now();
+  while (!window.destroyed) {
+    const now = performance.now();
+    const distance = (TERRAIN_SPEED * (now - previousTime)) / 1000;
+    previousTime = now;
+    worldPos[0] += HEADING[0] * distance;
+    worldPos[2] += HEADING[2] * distance;
+    terrain.update([worldPos[0], worldPos[1], worldPos[2]]);
+    render();
+    // Let Node.js process the window events between frames.
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 main().catch((error: unknown) => {

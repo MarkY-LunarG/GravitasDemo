@@ -1,8 +1,9 @@
 # WebGPU Hackathon 2026
 
-This application renders a flat terrain grid with WebGPU in Node.js.
+This application renders a terrain grid with WebGPU in Node.js.
 It shows the grid in an SDL window.
-The camera is above one corner of the grid and looks toward the center.
+The camera is above one corner of the grid, faces the center, and tilts down.
+The camera does not move, but the hills and craters move toward it.
 
 The application uses [`@kmamal/gpu`](https://github.com/kmamal/gpu) for WebGPU through Google Dawn.
 It uses [`@kmamal/sdl`](https://github.com/kmamal/node-sdl) for the window and the keyboard.
@@ -64,16 +65,41 @@ The window close button also exits the application.
 | `src/mat4.ts`        | 4x4 matrix functions for the model, view, and projection matrices.    |
 | `src/gpu-types.ts`   | WebGPU type names from the `@kmamal/gpu` typings.                     |
 
-To change the camera position, the look-at point, or the field of view, edit the constants at the
-top of `src/main.ts`.
+To change the camera position, the camera pitch (`CAMERA_PITCH`), or the field of view, edit the
+constants at the top of `src/main.ts`.
 To change the grid size or the number of grid points, edit the constants at the top of
 `src/terrain.ts`.
 To change the direction or the color of the sun, edit the `SUN_` constants in `src/main.ts`.
+All world units are meters.
+
+## Terrain
+
+The vertex shader calculates the height of each grid point from two parts:
+
+- Hills: Perlin noise with `NOISE_OCTAVES` octaves.
+  The first octave has a wavelength of `NOISE_WAVELENGTH` and an amplitude of `NOISE_AMPLITUDE`.
+- Craters: two layers, one of large craters and one of small craters.
+  Each layer divides the plane into square cells, and each cell has one crater or no crater.
+  The crater has a random position and a random radius in its cell.
+  Thus the distance between craters changes.
+
+The `_CRATER_` and `NOISE_` constants at the top of `src/terrain.ts` control these parts.
+The shader also calculates the slope of the height, and uses it for the normal.
+
+The grid does not move.
+`Terrain.update()` sets `worldPos`, the point of the height field that is at the grid center.
+Each frame, `src/main.ts` moves `worldPos` along the camera heading at `TERRAIN_SPEED` meters
+per second.
+Thus the terrain features come toward the camera.
+
+The vertex shader runs two times for each grid point in each frame.
+Thus `GRID_POINTS` has a large effect on the frame rate.
 
 ## Lighting
 
 One directional light, the sun, lights the scene.
-`SUN_VIEW_POSITION` in `src/main.ts` sets the sun direction relative to the camera.
+`SUN_VIEW_POSITION` in `src/main.ts` sets the sun direction relative to the camera heading.
+The camera pitch does not change the sun direction.
 The value `[-9000, 9000 * Math.SQRT2, -9000]` puts the sun in front of the camera,
 45 degrees to the left of the view direction, and 45 degrees above the horizon.
 The solid terrain uses diffuse (Lambert) lighting with an ambient term.
@@ -84,7 +110,6 @@ To light a new object with the same sun:
 1. Add `LIGHT_WGSL` to the shader code, and call `applyLight()` in the fragment shader.
 2. Put `light.bindGroupLayout` at index `LIGHT_BIND_GROUP` in the pipeline layout.
 3. Call `light.bind(pass)` before the draw.
-All world units are meters.
 
 ## Known issues
 
