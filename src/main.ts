@@ -140,9 +140,8 @@ function placeShip(ship: Ship): void {
   );
 }
 
-function computeViewProjection(aspect: number, eye: Vec3): Float32Array {
-  const projection = perspective(FIELD_OF_VIEW_Y, aspect, NEAR_PLANE, FAR_PLANE);
-  return multiply(projection, lookAt(eye, SHIP_CENTER, [0, 1, 0]));
+function computeProjection(aspect: number): Float32Array {
+  return perspective(FIELD_OF_VIEW_Y, aspect, NEAR_PLANE, FAR_PLANE);
 }
 
 async function main(): Promise<void> {
@@ -199,9 +198,10 @@ async function main(): Promise<void> {
     const toShip = [SHIP_CENTER[0] - eye[0], 0, SHIP_CENTER[2] - eye[2]] as const;
     const length = Math.hypot(toShip[0], toShip[2]);
     terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);
-    const viewProjection = computeViewProjection(window.pixelWidth / window.pixelHeight, eye);
-    terrain.setViewProjection(viewProjection);
-    ship.setViewProjection(viewProjection);
+    const view = lookAt(eye, SHIP_CENTER, [0, 1, 0]);
+    const projection = computeProjection(window.pixelWidth / window.pixelHeight);
+    terrain.setViewProjection(multiply(projection, view));
+    ship.setCamera(view, projection);
   };
 
   const render = (): void => {

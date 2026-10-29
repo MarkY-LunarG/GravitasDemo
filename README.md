@@ -199,7 +199,21 @@ The solid parts of the ship use the sun with `applyLight()`.
 They do not get shadows from the terrain, and they do not cast shadows on the terrain.
 The flames are unlit.
 They use their vertex colors with additive blending, as `lunarg-ship/viewer.html` does.
-This renderer has no bloom and no engine lights, so the flames do not glow on other surfaces.
+This renderer has no full-screen bloom.
+Instead, a glow sprite at each engine light adds a soft halo: a quad that faces the camera and adds
+the light color.
+The glow has the same fade and flicker as the light, and the depth test hides it behind the ship.
+The `GLOW_` constants at the top of `src/ship.ts` set its size and brightness.
+
+While the engines run, one orange point light behind each nozzle lights the solid parts of the
+ship.
+The strength of each light follows the flame size, so the light fades in and out with the
+ignition and the shutdown.
+The strength also flickers: it is the product of two sine waves, with a different phase for each
+engine.
+The `ENGINE_LIGHT_` constants at the top of `src/ship.ts` set the color, the strength, the
+distance, and the flicker.
+The engine lights do not light the terrain, and they do not cast shadows.
 
 `src/gltf.ts` supports only the glTF features that the ship uses.
 It throws an error for other features, for example textures, skins, or STEP interpolation.
