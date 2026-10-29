@@ -80,6 +80,7 @@ async function main(): Promise<void> {
     updateCamera();
     render();
   });
+
   window.on('keyDown', (event) => {
     if (event.repeat) {
       return;
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
       render();
     }
   });
+
   window.on('close', () => {
     device.destroy();
     gpu.destroy(instance);

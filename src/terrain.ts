@@ -3,7 +3,7 @@
 
 import gpu from '@kmamal/gpu';
 import type { Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
-import { type Mat4, multiply, translationScale } from './mat4.js';
+import { type Mat4, type Vec3, multiply, translationScale } from './mat4.js';
 
 export type TerrainRenderMode = 'solid' | 'wireframe';
 
@@ -28,6 +28,7 @@ const GRID_POINTS: u32 = ${GRID_POINTS}u;
 
 struct Uniforms {
   mvp: mat4x4f,
+  worldPos: vec3f,
 }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -90,14 +91,16 @@ export class Terrain {
   private readonly solidPipeline;
   private readonly wirePipeline;
   private readonly modelMatrix: Mat4;
+  private worldPosition: Vec3;
   private mode: TerrainRenderMode = 'solid';
 
   constructor(device: Device, format: TextureFormat) {
     this.device = device;
     this.modelMatrix = translationScale([-HALF_EXTENT, 0, -HALF_EXTENT], [TERRAIN_EXTENT, 1, TERRAIN_EXTENT]);
+    this.worldPosition = [0, 0, 0];
 
     this.uniformBuffer = device.createBuffer({
-      size: 16 * Float32Array.BYTES_PER_ELEMENT,
+      size: 20 * Float32Array.BYTES_PER_ELEMENT,
       usage: gpu.GPUBufferUsage.UNIFORM | gpu.GPUBufferUsage.COPY_DST,
     });
 
@@ -137,6 +140,21 @@ export class Terrain {
   // Combine the camera view-projection matrix with the terrain model matrix.
   setViewProjection(viewProjection: Mat4): void {
     this.device.queue.writeBuffer(this.uniformBuffer, 0, multiply(viewProjection, this.modelMatrix));
+    this.writeWorldPosition();
+  }
+
+  update(currentPos: Vec3): void {
+    this.worldPosition = currentPos;
+    this.writeWorldPosition();
+  }
+
+  // worldPos follows the 64-byte mvp matrix in the Uniforms struct.
+  private writeWorldPosition(): void {
+    this.device.queue.writeBuffer(
+      this.uniformBuffer,
+      16 * Float32Array.BYTES_PER_ELEMENT,
+      new Float32Array(this.worldPosition),
+    );
   }
 
   draw(pass: RenderPassEncoder): void {
