@@ -2,6 +2,8 @@
 // The camera does not move, and the terrain grid covers its view.
 // The terrain features move toward the camera.
 // The LunarG ship is in the center of the view and faces away from the camera.
+// The camera follows a path that repeats: it moves around the ship to the left, then to the
+// right, and then back to the center.
 // Hold Space to run the ship engines. Press W to toggle between the solid and the wireframe
 // terrain. Press ESC to exit.
 
@@ -10,7 +12,7 @@ import gpu from '@kmamal/gpu';
 import sdl from '@kmamal/sdl';
 import { loadGlb } from './gltf.js';
 import { DirectionalLight } from './light.js';
-import { compose, lookAt, multiply, perspective, transformPoint, viewToWorldDirection } from './mat4.js';
+import { type Vec3, compose, lookAt, multiply, perspective, transformPoint, viewToWorldDirection } from './mat4.js';
 import { Ship } from './ship.js';
 import { TERRAIN_RADIUS, Terrain } from './terrain.js';
 
@@ -66,32 +68,81 @@ function viewDirection(pitch: number): readonly [number, number, number] {
   return [HEADING[0] * Math.cos(pitch), Math.sin(pitch), HEADING[2] * Math.cos(pitch)];
 }
 
+// The view of the camera at its start position. The sun direction uses the level view (pitch 0).
 function computeView(pitch: number): Float32Array {
   const eye = EYE;
   const forward = viewDirection(pitch);
   return lookAt(eye, [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]], [0, 1, 0]);
 }
 
-// Put the center of the ship on the center of the view, SHIP_DISTANCE from the camera.
-// The ship stays level, and its front (+Z) points along the camera heading.
+// The world position of the ship center: on the center of the start view, SHIP_DISTANCE from
+// the camera.
+const SHIP_CENTER = [
+  EYE[0] + viewDirection(CAMERA_PITCH)[0] * SHIP_DISTANCE,
+  EYE[1] + viewDirection(CAMERA_PITCH)[1] * SHIP_DISTANCE,
+  EYE[2] + viewDirection(CAMERA_PITCH)[2] * SHIP_DISTANCE,
+] as const;
+
+// The camera path. The camera moves on a horizontal circle around the ship center, at its start
+// distance and height, and always looks at the ship center. The path repeats every
+// CAMERA_PATH_PERIOD seconds. Each key is [time in seconds, angle], where the angle is a fraction
+// of CAMERA_ORBIT_ANGLE: 1 is to the left of the start position, and -1 is to the right.
+// Between two keys, the angle changes along a smooth curve.
+const CAMERA_ORBIT_ANGLE = (20 * Math.PI) / 180;
+const CAMERA_PATH_PERIOD = 20;
+const CAMERA_PATH = [
+  [0, 0],
+  [3, 0],
+  [5, 1],
+  [9, 1],
+  [12, -1],
+  [16, -1],
+  [18, 0],
+  [20, 0],
+] as const;
+
+// The orbit angle of the camera, in radians, at a time in seconds.
+function cameraOrbitAngle(seconds: number): number {
+  const time = seconds % CAMERA_PATH_PERIOD;
+  for (let key = 1; key < CAMERA_PATH.length; ++key) {
+    const [endTime, endAngle] = CAMERA_PATH[key];
+    if (time <= endTime) {
+      const [startTime, startAngle] = CAMERA_PATH[key - 1];
+      const fraction = (time - startTime) / (endTime - startTime);
+      const smooth = fraction * fraction * (3 - 2 * fraction);
+      return (startAngle + (endAngle - startAngle) * smooth) * CAMERA_ORBIT_ANGLE;
+    }
+  }
+  return 0;
+}
+
+// The camera position at an orbit angle. Positive angles move the camera to its left.
+function cameraEye(angle: number): Vec3 {
+  const distance = Math.hypot(EYE[0] - SHIP_CENTER[0], EYE[2] - SHIP_CENTER[2]);
+  // The horizontal unit vector to the left of the start heading.
+  const left = [HEADING[2], 0, -HEADING[0]];
+  return [
+    SHIP_CENTER[0] + (-HEADING[0] * Math.cos(angle) + left[0] * Math.sin(angle)) * distance,
+    EYE[1],
+    SHIP_CENTER[2] + (-HEADING[2] * Math.cos(angle) + left[2] * Math.sin(angle)) * distance,
+  ];
+}
+
+// Put the ship center at SHIP_CENTER. The ship stays level, and its front (+Z) points along the
+// start heading of the camera.
 function placeShip(ship: Ship): void {
   const yaw = Math.atan2(HEADING[0], HEADING[2]);
   const rotation = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)] as const;
   const rotatedCenter = transformPoint(compose([0, 0, 0], rotation, [1, 1, 1]), ship.center);
-  const forward = viewDirection(CAMERA_PITCH);
   ship.setPlacement(
-    [
-      EYE[0] + forward[0] * SHIP_DISTANCE - rotatedCenter[0],
-      EYE[1] + forward[1] * SHIP_DISTANCE - rotatedCenter[1],
-      EYE[2] + forward[2] * SHIP_DISTANCE - rotatedCenter[2],
-    ],
+    [SHIP_CENTER[0] - rotatedCenter[0], SHIP_CENTER[1] - rotatedCenter[1], SHIP_CENTER[2] - rotatedCenter[2]],
     rotation,
   );
 }
 
-function computeViewProjection(aspect: number): Float32Array {
+function computeViewProjection(aspect: number, eye: Vec3): Float32Array {
   const projection = perspective(FIELD_OF_VIEW_Y, aspect, NEAR_PLANE, FAR_PLANE);
-  return multiply(projection, computeView(CAMERA_PITCH));
+  return multiply(projection, lookAt(eye, SHIP_CENTER, [0, 1, 0]));
 }
 
 async function main(): Promise<void> {
@@ -127,7 +178,6 @@ async function main(): Promise<void> {
     AMBIENT_COLOR,
   );
   const terrain = new Terrain(device, surfaceFormat, DEPTH_FORMAT, sun);
-  terrain.setGridCenter(EYE, HEADING);
   const ship = new Ship(device, surfaceFormat, DEPTH_FORMAT, sun, loadGlb(SHIP_MODEL_PATH));
   placeShip(ship);
 
@@ -142,8 +192,14 @@ async function main(): Promise<void> {
   };
   let depthTexture = createDepthTexture();
 
-  const updateCamera = (): void => {
-    const viewProjection = computeViewProjection(window.pixelWidth / window.pixelHeight);
+  // Move the camera along its path. The terrain grid follows the camera, so that the grid always
+  // covers the view.
+  const updateCamera = (seconds: number): void => {
+    const eye = cameraEye(cameraOrbitAngle(seconds));
+    const toShip = [SHIP_CENTER[0] - eye[0], 0, SHIP_CENTER[2] - eye[2]] as const;
+    const length = Math.hypot(toShip[0], toShip[2]);
+    terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);
+    const viewProjection = computeViewProjection(window.pixelWidth / window.pixelHeight, eye);
     terrain.setViewProjection(viewProjection);
     ship.setViewProjection(viewProjection);
   };
@@ -177,7 +233,6 @@ async function main(): Promise<void> {
     renderer.resize();
     depthTexture.destroy();
     depthTexture = createDepthTexture();
-    updateCamera();
   });
 
   window.on('keyDown', (event) => {
@@ -211,16 +266,16 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
-  updateCamera();
-
-  // Move worldPos forward along the camera heading. The terrain samples its height field at
-  // worldPos, so the terrain features come toward the camera, but the camera does not move.
+  // Move worldPos forward along the start heading of the camera. The terrain samples its height
+  // field at worldPos, so the terrain features come toward the ship, but the ship does not move.
   const worldPos = [0, 0, 0];
-  let previousTime = performance.now();
+  const startTime = performance.now();
+  let previousTime = startTime;
   while (!window.destroyed) {
     const now = performance.now();
     const seconds = (now - previousTime) / 1000;
     previousTime = now;
+    updateCamera((now - startTime) / 1000);
     worldPos[0] += HEADING[0] * TERRAIN_SPEED * seconds;
     worldPos[2] += HEADING[2] * TERRAIN_SPEED * seconds;
     terrain.update([worldPos[0], worldPos[1], worldPos[2]]);

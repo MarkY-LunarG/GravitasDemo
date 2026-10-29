@@ -3,7 +3,8 @@
 This application renders a terrain grid with WebGPU in Node.js.
 It shows the grid in an SDL window.
 The camera is 500 m above the ground and tilts down.
-The camera does not move, but the hills and craters move toward it.
+The hills and craters move toward the ship, but the ship does not move.
+The camera moves around the ship on a path that repeats every 20 seconds.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
 
@@ -108,7 +109,7 @@ pixels wide at 1920 x 1080.
 `GRID_COLUMNS`, `GRID_ROWS`, `GRID_NEAR`, `GRID_HALF_ANGLE`, and `TERRAIN_RADIUS` at the top of
 `src/terrain.ts` set the shape of the grid.
 `Terrain.setGridCenter()` puts the grid below the camera and turns it to the camera heading.
-The grid is correct only for a camera that does not move.
+`src/main.ts` calls it in each frame, so the grid follows the camera.
 
 Far cells are large, so the shader removes noise octaves and craters that are smaller than
 approximately 4 cells.
@@ -151,6 +152,28 @@ To light a new object with the same sun:
 4. Call `light.bind(pass)` before the draw.
 
 Other objects do not cast shadows on the terrain, and the terrain does not cast shadows on them.
+
+## Camera path
+
+The camera moves on a horizontal circle around the ship center, and it always looks at the ship
+center.
+The circle has the start distance and height of the camera.
+The path repeats every `CAMERA_PATH_PERIOD` seconds (20):
+
+| Time (s) | Camera                                                   |
+| -------- | -------------------------------------------------------- |
+| 0 to 3   | At the start position, behind the ship.                  |
+| 3 to 5   | Moves `CAMERA_ORBIT_ANGLE` (20 degrees) to the left.     |
+| 5 to 9   | Stays at the left, with a view of the left of the ship.  |
+| 9 to 12  | Moves to 20 degrees to the right.                        |
+| 12 to 16 | Stays at the right, with a view of the right of the ship. |
+| 16 to 18 | Moves back to the start position.                        |
+| 18 to 20 | Stays at the start position.                             |
+
+`CAMERA_PATH` in `src/main.ts` holds these times and angles.
+Each move starts and stops smoothly.
+The sun direction and the ship position use the start position of the camera, so they do not
+change when the camera moves.
 
 ## Ship
 

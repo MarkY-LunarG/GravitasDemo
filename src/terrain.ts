@@ -5,7 +5,8 @@
 // camera. The columns are at equal angles, and the radius of each row is GRID_RING_RATIO times the
 // radius of the row before it. Thus a cell has approximately the same size on the screen at all
 // distances: near cells are small and far cells are large. The grid is correct only for a camera
-// that stays at the grid center, and looks along the grid heading.
+// at the grid center that looks approximately along the grid heading. When the camera moves,
+// call setGridCenter() again.
 //
 // The grid itself does not move. worldPos offsets the point where the vertex shader samples the
 // height field, so the terrain features move across the grid.
@@ -402,7 +403,7 @@ export class Terrain {
   }
 
   // Put the grid center below the camera, and turn the grid to the horizontal camera heading.
-  // Only X and Z of position and heading are used.
+  // Only X and Z of position and heading are used. Call this each time the camera moves.
   setGridCenter(position: Vec3, heading: Vec3): void {
     this.device.queue.writeBuffer(
       this.uniformBuffer,
