@@ -16,6 +16,7 @@ import type { DepthFormat, Device, RenderPassEncoder, TextureFormat } from './gp
 import { type DirectionalLight, LIGHT_WGSL } from './light.js';
 import { type Mat4, type Vec3, frustumPlanes } from './mat4.js';
 import { NOISE_WGSL } from './noise.js';
+import type { ShipPath } from './ship-path.js';
 
 const ASTEROID_COUNT = 4000;
 const ASTEROID_SHAPES = 8;
@@ -43,18 +44,26 @@ const SHAPE_STRETCH = [0.65, 1.0] as const;
 // The asteroids move in a box around the ship. The box axes are the heading (toward the front of
 // the ship), right, and up, and the values are meters from the ship center. An asteroid that
 // leaves the box on one side comes back on the other side.
+// More asteroids start near the center of the box than near its sides: the right and up positions
+// are a random number to the power BOX_CENTER_BIAS, so that some asteroids are near the ship path.
 // All asteroids move toward the camera at FLOW_SPEED (times the speed scale from the scene), and
 // each asteroid also has a random velocity of up to VELOCITY_SPREAD in each direction.
-// CLEAR_RADIUS is the radius of a tube along the heading, through the ship center, where no
-// asteroid can go. The tube contains the ship and all camera positions.
 const BOX_HEADING = [-400, 4000] as const;
 const BOX_RIGHT = [-1500, 1500] as const;
 const BOX_UP = [-600, 600] as const;
-const FLOW_SPEED = 150;
+const BOX_CENTER_BIAS = 1.8;
+export const FLOW_SPEED = 150;
 const VELOCITY_SPREAD = 15;
 const SPIN_SPEED = [0.05, 0.6] as const;
-const CLEAR_RADIUS = 130;
-// The speed in meters per second at which an asteroid in the tube moves out of it.
+// No asteroid can go into two tubes along the heading:
+// - The ship tube follows the ship path. An asteroid at a distance d in front of the ship comes to
+//   the ship after d / (its closing speed) seconds, so it stays SHIP_CLEARANCE meters from the
+//   position of the ship path at that time. Thus the ship flies near the asteroids, but it does not
+//   hit them.
+// - The camera tube is a straight tube through the camera, with a radius of CAMERA_CLEARANCE.
+const SHIP_CLEARANCE = 50;
+const CAMERA_CLEARANCE = 50;
+// The speed in meters per second at which an asteroid in a tube moves out of it.
 const CLEAR_PUSH_SPEED = 200;
 
 const RANDOM_SEED = 20261029;
@@ -253,15 +262,18 @@ fn cs_shapes(@builtin(global_invocation_id) id: vec3u) {
 }
 `;
 
-const UPDATE_SHADER = /* wgsl */ `
+// The update shader includes the WGSL function shipPathOffset() of the ship path.
+const makeUpdateShader = (shipPathWgsl: string): string => /* wgsl */ `
 ${COMMON_WGSL}
+${shipPathWgsl}
 const COUNT: u32 = ${ASTEROID_COUNT}u;
 const LODS: u32 = ${LOD_COUNT}u;
 const LOD_THRESHOLD: f32 = ${LOD_THRESHOLD};
 const BOUNDING_SCALE: f32 = ${BOUNDING_SCALE};
 const BOX_MIN: vec3f = vec3f(${BOX_RIGHT[0]}.0, ${BOX_UP[0]}.0, ${BOX_HEADING[0]}.0);
 const BOX_MAX: vec3f = vec3f(${BOX_RIGHT[1]}.0, ${BOX_UP[1]}.0, ${BOX_HEADING[1]}.0);
-const CLEAR_RADIUS: f32 = ${CLEAR_RADIUS}.0;
+const SHIP_CLEARANCE: f32 = ${SHIP_CLEARANCE}.0;
+const CAMERA_CLEARANCE: f32 = ${CAMERA_CLEARANCE}.0;
 const CLEAR_PUSH_SPEED: f32 = ${CLEAR_PUSH_SPEED}.0;
 
 struct Params {
@@ -273,6 +285,8 @@ struct Params {
   cameraPosition: vec4f,
   seconds: f32,
   flowSpeed: f32,
+  // The time in seconds on the ship path.
+  pathTime: f32,
 }
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> asteroids: array<Asteroid>;
@@ -281,6 +295,17 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> drawArgs: array<atomic<u32>>;
 // COUNT entries for each draw: the asteroid indices of the visible instances.
 @group(0) @binding(3) var<storage, read_write> visible: array<u32>;
+
+// Move point out of a circle around center, at a speed of at most maxStep in this frame.
+fn pushOut(point: vec2f, center: vec2f, minimum: f32, maxStep: f32) -> vec2f {
+  let offset = point - center;
+  let dist = length(offset);
+  if (dist >= minimum) {
+    return point;
+  }
+  let outward = select(vec2f(1.0, 0.0), offset / dist, dist > 1e-3);
+  return point + outward * min(minimum - dist, maxStep);
+}
 
 fn wrap(value: f32, low: f32, high: f32) -> f32 {
   return low + (value - low) - floor((value - low) / (high - low)) * (high - low);
@@ -309,12 +334,18 @@ fn cs_update(@builtin(global_invocation_id) id: vec3u) {
   local = vec3f(wrap(local.x, BOX_MIN.x, BOX_MAX.x), wrap(local.y, BOX_MIN.y, BOX_MAX.y),
                 wrap(local.z, BOX_MIN.z, BOX_MAX.z));
   let bound = asteroid.radius * BOUNDING_SCALE;
-  let lateral = length(local.xy);
-  let minimum = CLEAR_RADIUS + bound;
-  if (lateral < minimum) {
-    let outward = select(vec2f(1.0, 0.0), local.xy / lateral, lateral > 1e-3);
-    local = vec3f(local.xy + outward * min(minimum - lateral, CLEAR_PUSH_SPEED * dt), local.z);
-  }
+  let maxStep = CLEAR_PUSH_SPEED * dt;
+  // The asteroid comes toward the ship at the flow speed minus its own speed along the heading.
+  // With this exact speed, the path point of the asteroid does not change, so the asteroid moves
+  // out of the tube only once, far in front of the ship.
+  let closingSpeed = max(params.flowSpeed - dot(asteroid.velocity, params.heading.xyz), 1.0);
+  let arrival = local.z / closingSpeed;
+  let pathPoint = shipPathOffset(params.pathTime + arrival);
+  var lateral = pushOut(local.xy, pathPoint.xy, SHIP_CLEARANCE + bound, maxStep);
+  let cameraRelative = params.cameraPosition.xyz - params.shipCenter.xyz;
+  let camera = vec2f(dot(cameraRelative, params.right.xyz), dot(cameraRelative, params.up.xyz));
+  lateral = pushOut(lateral, camera, CAMERA_CLEARANCE + bound, maxStep);
+  local = vec3f(lateral, local.z);
   asteroid.position = params.shipCenter.xyz + params.right.xyz * local.x + params.up.xyz * local.y
     + params.heading.xyz * local.z;
   asteroids[index] = asteroid;
@@ -402,6 +433,8 @@ export class Asteroids {
     light: DirectionalLight,
     shipCenter: Vec3,
     heading: Vec3,
+    shipPath: ShipPath,
+    cameraPosition: Vec3,
   ) {
     this.device = device;
     this.light = light;
@@ -446,7 +479,7 @@ export class Asteroids {
     });
     this.makeShapes(this.createBuffer(directions, GPUBufferUsage.STORAGE), shapeVertexBuffer, vertexCounts);
 
-    const asteroidBuffer = this.createBuffer(this.makeAsteroids(), GPUBufferUsage.STORAGE);
+    const asteroidBuffer = this.createBuffer(this.makeAsteroids(shipPath, cameraPosition), GPUBufferUsage.STORAGE);
     const visibleBuffer = device.createBuffer({
       size: DRAW_COUNT * ASTEROID_COUNT * Uint32Array.BYTES_PER_ELEMENT,
       usage: GPUBufferUsage.STORAGE,
@@ -457,7 +490,7 @@ export class Asteroids {
       size: UPDATE_PARAMS_FLOATS * Float32Array.BYTES_PER_ELEMENT,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    const updateModule = device.createShaderModule({ code: UPDATE_SHADER });
+    const updateModule = device.createShaderModule({ code: makeUpdateShader(shipPath.wgsl()) });
     this.updatePipeline = device.createComputePipeline({
       layout: 'auto',
       compute: { module: updateModule, entryPoint: 'cs_update' },
@@ -528,9 +561,10 @@ export class Asteroids {
   }
 
   // Record the update and cull pass for a time step in seconds. speedScale multiplies FLOW_SPEED.
-  // Call this before the render pass that draws the asteroids.
-  update(encoder: GPUCommandEncoder, seconds: number, speedScale: number): void {
-    this.updateParams.set([seconds, FLOW_SPEED * speedScale], 44);
+  // pathTime is the current time on the ship path. Call this before the render pass that draws the
+  // asteroids.
+  update(encoder: GPUCommandEncoder, seconds: number, speedScale: number, pathTime: number): void {
+    this.updateParams.set([seconds, FLOW_SPEED * speedScale, pathTime], 44);
     this.device.queue.writeBuffer(this.updateParamsBuffer, 0, this.updateParams);
     // Start each frame with no visible instances.
     this.device.queue.writeBuffer(this.drawArgsBuffer, 0, this.drawArgsTemplate);
@@ -577,8 +611,8 @@ export class Asteroids {
     this.device.queue.submit([encoder.finish()]);
   }
 
-  // The start state of all asteroids, at random positions in the box and out of the clear tube.
-  private makeAsteroids(): ArrayBuffer {
+  // The start state of all asteroids, at random positions in the box and out of the two tubes.
+  private makeAsteroids(shipPath: ShipPath, cameraPosition: Vec3): ArrayBuffer {
     const random = makeRandom(RANDOM_SEED);
     const between = (range: readonly [number, number]) => range[0] + (range[1] - range[0]) * random();
     const data = new ArrayBuffer(ASTEROID_COUNT * ASTEROID_FLOATS * 4);
@@ -588,18 +622,36 @@ export class Asteroids {
     for (let i = 0; i < ASTEROID_COUNT; ++i) {
       // The cube of a random number makes small radii much more common than large radii.
       const radius = ASTEROID_RADIUS[0] * (ASTEROID_RADIUS[1] / ASTEROID_RADIUS[0]) ** (random() ** 3);
-      let x = between(BOX_RIGHT);
-      let y = between(BOX_UP);
-      const lateral = Math.hypot(x, y);
-      const minimum = CLEAR_RADIUS + radius * BOUNDING_SCALE;
-      if (lateral < minimum) {
-        const scale = minimum / Math.max(lateral, 1e-3);
-        x *= scale;
-        y *= scale;
-      }
+      const centered = (range: readonly [number, number]) =>
+        (random() < 0.5 ? range[0] : range[1]) * random() ** BOX_CENTER_BIAS;
+      let x = centered(BOX_RIGHT);
+      let y = centered(BOX_UP);
       const z = between(BOX_HEADING);
-      const position = [0, 1, 2].map((axis) => this.shipCenter[axis] + right[axis] * x + up[axis] * y + heading[axis] * z);
       const velocity = [0, 1, 2].map(() => (random() * 2 - 1) * VELOCITY_SPREAD);
+      // The same tubes as in the update shader, at path time 0.
+      const alongHeading = velocity[0] * heading[0] + velocity[1] * heading[1] + velocity[2] * heading[2];
+      const closingSpeed = FLOW_SPEED - alongHeading;
+      const pathPoint = shipPath.offset(z / closingSpeed);
+      const relative = [0, 1, 2].map((axis) => cameraPosition[axis] - this.shipCenter[axis]);
+      const camera = [
+        relative[0] * right[0] + relative[1] * right[1] + relative[2] * right[2],
+        relative[0] * up[0] + relative[1] * up[1] + relative[2] * up[2],
+      ];
+      for (const [cx, cy, clearance] of [
+        [pathPoint[0], pathPoint[1], SHIP_CLEARANCE],
+        [camera[0], camera[1], CAMERA_CLEARANCE],
+      ]) {
+        const minimum = clearance + radius * BOUNDING_SCALE;
+        const distance = Math.hypot(x - cx, y - cy);
+        if (distance < minimum) {
+          const scale = minimum / Math.max(distance, 1e-3);
+          x = cx + (x - cx) * scale;
+          y = cy + (y - cy) * scale;
+        }
+      }
+      const position = [0, 1, 2].map(
+        (axis) => this.shipCenter[axis] + right[axis] * x + up[axis] * y + heading[axis] * z,
+      );
       // A random unit vector for the spin axis.
       const axisZ = random() * 2 - 1;
       const axisAngle = random() * 2 * Math.PI;
@@ -624,7 +676,10 @@ export class Asteroids {
 
   // Make a GPU buffer that contains data. The size of a buffer write must be a multiple of 4 bytes.
   private createBuffer(data: ArrayBufferView | ArrayBuffer, usage: number): GPUBuffer {
-    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    const bytes =
+      data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     const size = Math.ceil(bytes.byteLength / 4) * 4;
     const buffer = this.device.createBuffer({ size, usage: usage | GPUBufferUsage.COPY_DST });
     const padded = new Uint8Array(size);

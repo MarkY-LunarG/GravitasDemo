@@ -19,11 +19,13 @@ import {
   lookAt,
   multiply,
   perspective,
+  quatFromAxisAngle,
+  quatMultiply,
   transformPoint,
   viewToWorldDirection,
 } from './mat4.js';
 import { SCENES } from './scenes/index.js';
-import type { Scene, SharedObjects } from './scenes/scene.js';
+import type { Scene, SharedObjects, ShipTurn } from './scenes/scene.js';
 import { Ship } from './ship.js';
 import { TERRAIN_RADIUS, Terrain } from './terrain.js';
 
@@ -132,18 +134,28 @@ function cameraEye(angle: number): Vec3 {
   ];
 }
 
-// Put the ship center forward meters in front of SHIP_CENTER. The ship stays level, and its front
-// (+Z) points along the start heading of the camera.
-function placeShip(ship: Ship, forward = 0): void {
-  const yaw = Math.atan2(HEADING[0], HEADING[2]);
-  const rotation = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)] as const;
+// The horizontal unit vector to the right of the start heading.
+const RIGHT = [-HEADING[2], 0, HEADING[0]] as const;
+
+// Put the ship center at offset from SHIP_CENTER, along RIGHT, up, and HEADING, in meters, and turn
+// the ship around its center. Without a turn, the ship is level, and its front (+Z) points along
+// HEADING. In the model, +X is to the left of the ship, +Y is up, and +Z is the front.
+function placeShip(ship: Ship, offset: Vec3 = [0, 0, 0], turn: ShipTurn = { yaw: 0, pitch: 0, roll: 0 }): void {
+  const heading = quatFromAxisAngle([0, 1, 0], Math.atan2(HEADING[0], HEADING[2]));
+  // A turn of the nose to the right is a negative rotation around +Y, because +X is to the left.
+  // A raise of the nose is a negative rotation around +X. A positive rotation around +Z moves the
+  // top of the ship to its right.
+  const local = quatMultiply(
+    quatFromAxisAngle([0, 1, 0], -turn.yaw),
+    quatMultiply(quatFromAxisAngle([1, 0, 0], -turn.pitch), quatFromAxisAngle([0, 0, 1], turn.roll)),
+  );
+  const rotation = quatMultiply(heading, local);
   const rotatedCenter = transformPoint(compose([0, 0, 0], rotation, [1, 1, 1]), ship.center);
+  const position = [0, 1, 2].map(
+    (i) => SHIP_CENTER[i] + RIGHT[i] * offset[0] + (i === 1 ? offset[1] : 0) + HEADING[i] * offset[2],
+  );
   ship.setPlacement(
-    [
-      SHIP_CENTER[0] + HEADING[0] * forward - rotatedCenter[0],
-      SHIP_CENTER[1] - rotatedCenter[1],
-      SHIP_CENTER[2] + HEADING[2] * forward - rotatedCenter[2],
-    ],
+    [position[0] - rotatedCenter[0], position[1] - rotatedCenter[1], position[2] - rotatedCenter[2]],
     rotation,
   );
 }
@@ -213,7 +225,8 @@ export class App {
       ship: this.ship,
       shipCenter: SHIP_CENTER,
       heading: HEADING,
-      moveShipForward: (distance) => placeShip(this.ship, distance),
+      cameraStart: cameraEye(0),
+      moveShip: (offset, turn) => placeShip(this.ship, offset, turn),
     };
     this.scenes = SCENES.map((createScene) => createScene(shared));
   }
@@ -238,7 +251,7 @@ export class App {
       placeShip(this.ship);
       this.ship.setBoost(false);
     }
-    const { viewProjection, cameraPosition } = this.updateCamera(width / height);
+    const { viewProjection, cameraPosition } = this.updateCamera(width / height, scene.stationaryCamera ?? false);
     this.ship.update(seconds);
     const encoder = this.device.createCommandEncoder();
     scene.update?.({
@@ -253,10 +266,11 @@ export class App {
     this.render(encoder, colorView, width, height, scene, fade);
   }
 
-  // Move the camera along its path, and give the camera to the shared objects. The terrain grid
-  // follows the camera, so that the grid always covers the view.
-  private updateCamera(aspect: number): { viewProjection: Mat4; cameraPosition: Vec3 } {
-    const eye = cameraEye(cameraOrbitAngle(this.elapsed));
+  // Move the camera along its path, or keep it at its start position for a stationary camera.
+  // Then give the camera to the shared objects. The terrain grid follows the camera, so that the
+  // grid always covers the view.
+  private updateCamera(aspect: number, stationary: boolean): { viewProjection: Mat4; cameraPosition: Vec3 } {
+    const eye = cameraEye(stationary ? 0 : cameraOrbitAngle(this.elapsed));
     const toShip = [SHIP_CENTER[0] - eye[0], 0, SHIP_CENTER[2] - eye[2]] as const;
     const length = Math.hypot(toShip[0], toShip[2]);
     this.terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);

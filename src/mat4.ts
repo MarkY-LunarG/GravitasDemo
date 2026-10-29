@@ -156,3 +156,21 @@ export function invert(m: Mat4): Mat4 {
     (a20 * b03 - a21 * b01 + a22 * b00) * d,
   ]);
 }
+
+// The rotation of angle radians around a unit axis, as a quaternion.
+export function quatFromAxisAngle(axis: Vec3, angle: number): Quat {
+  const s = Math.sin(angle / 2);
+  return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(angle / 2)];
+}
+
+// The rotation b, then the rotation a.
+export function quatMultiply(a: Quat, b: Quat): Quat {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  return [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+}

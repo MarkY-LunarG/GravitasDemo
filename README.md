@@ -96,6 +96,7 @@ The window close button also exits the desktop application.
 | `src/asteroids.ts`   | The asteroids: shape, update, and cull compute shaders, and indirect draws. |
 | `src/sky.ts`         | The background: stars, and as options a nebula and a ringed planet.   |
 | `src/noise.ts`       | WGSL hash and 3D Perlin noise that the asteroids and the sky use.     |
+| `src/ship-path.ts`   | A smooth ship path from sine waves, in TypeScript and in WGSL.        |
 | `src/scenes/scene.ts` | The `Scene` interface, and the shared objects that scenes can use.   |
 | `src/scenes/index.ts` | The list of scenes, in the order that they play.                     |
 | `src/scenes/terrain-scene.ts` | Scene 1: the terrain and the ship.                           |
@@ -195,12 +196,14 @@ order:
 | Scene                | File                | Duration   | Contents                         |
 | -------------------- | ------------------- | ---------- | -------------------------------- |
 | `Terrain and ship`   | `terrain-scene.ts`  | 40 seconds | The terrain, the ship, and stars. |
-| `Asteroids and ship` | `asteroid-scene.ts` | No end     | The asteroids, the ship, and a planet, a nebula, and stars. |
+| `Asteroids and ship` | `asteroid-scene.ts` | No end     | The ship moves around the asteroids, with a planet, a nebula, and stars. The camera does not move. |
 
 The last scene continues until you stop the application.
 Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
 fades in from black in the same time.
-The camera path, the engines, and the engine boost continue across the transition.
+The engines continue across the transition.
+A scene with `stationaryCamera: true` keeps the camera at its start position.
+Other scenes use the camera path.
 `App.sceneName` gives the name of the current scene.
 
 The App (`src/app.ts`) owns the objects that all scenes share: the sun, the terrain, the ship,
@@ -211,6 +214,15 @@ In the render pass, it calls `draw()` of the current scene, and then draws the s
 A scene contains only its name, its duration, its own objects, and the shared objects that it draws.
 For example, the terrain scene moves and draws the shared terrain, and the asteroid scene makes and
 draws its own asteroids.
+A scene can move and turn the ship with `moveShip(offset, turn)` in `SharedObjects`.
+The offset is in meters from the start position of the ship, along the right, up, and heading
+directions.
+The turn has a yaw, a pitch, and a roll in radians.
+
+In the asteroid scene, the ship follows `SHIP_PATH`: wide turns to the left and right, and smaller
+moves up and down and forward and back.
+The path starts at the start position of the ship and eases in over 3 seconds.
+The nose of the ship points along the path, and the ship banks into turns.
 
 To add a scene:
 
@@ -266,8 +278,16 @@ The GPU does all of the work after the start:
 
 The asteroids move toward the camera at `FLOW_SPEED` (150 m/s), with a small random velocity each.
 They stay in a box around the ship: an asteroid that leaves one side comes back on the other side.
-No asteroid can go into a tube of radius `CLEAR_RADIUS` (130 m) along the flight line, so the
-asteroids do not hit the ship or the camera.
+No asteroid can go into two tubes along the heading:
+
+- The ship tube (radius `SHIP_CLEARANCE`, 50 m) follows the ship path.
+  For each asteroid, the shader calculates when the asteroid comes to the ship, and keeps the
+  asteroid away from the position of the ship path at that time.
+  Thus the ship flies near the asteroids, but it does not hit them.
+- The camera tube (radius `CAMERA_CLEARANCE`, 50 m) is a straight tube through the camera.
+
+More asteroids start near the center of the box than near its sides (`BOX_CENTER_BIAS`), so that
+some asteroids are near the ship path.
 The start positions come from a random number generator with a fixed seed, so each run of the
 benchmark is the same.
 The constants are at the top of `src/asteroids.ts`.

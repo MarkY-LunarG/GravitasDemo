@@ -34,7 +34,7 @@ export function createTerrainScene(shared: SharedObjects): Scene {
       const flyTime = sceneTime - (DURATION - FLY_OFF_TIME);
       if (flyTime >= 0) {
         shared.ship.setBoost(true);
-        shared.moveShipForward(0.5 * FLY_OFF_ACCELERATION * flyTime * flyTime);
+        shared.moveShip([0, 0, 0.5 * FLY_OFF_ACCELERATION * flyTime * flyTime]);
       }
     },
     draw(pass) {
