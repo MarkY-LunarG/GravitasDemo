@@ -1,6 +1,7 @@
 // The browser target: show the scene (src/app.ts) in a canvas with the browser WebGPU API.
 // Press W to toggle between the solid and the wireframe terrain, and N to go to the next scene.
 // To start at a scene, give its number (from 1) in the URL: ?scene=2
+// After the last scene, the canvas shows the results page. Its Exit button stops the application.
 
 import { App } from './app.js';
 import { parseGlb } from './gltf.js';
@@ -73,6 +74,25 @@ async function main(): Promise<void> {
     }
   });
 
+  // The pointer positions are in CSS pixels. The view has the size of the canvas in device pixels.
+  const toPixels = (event: PointerEvent): [number, number] => [
+    (event.offsetX * canvas.width) / canvas.clientWidth,
+    (event.offsetY * canvas.height) / canvas.clientHeight,
+  ];
+  canvas.addEventListener('pointermove', (event) => app.pointerMove(...toPixels(event)));
+  canvas.addEventListener('pointerdown', (event) => {
+    if (event.button === 0) {
+      app.click(...toPixels(event));
+    }
+  });
+
+  // A page can close only a window that a script opened. If the window stays open, show a message.
+  const stop = (): void => {
+    device.destroy();
+    window.close();
+    showError('The benchmark has stopped. You can close this page.');
+  };
+
   let previousTime = performance.now();
   const frame = (now: number): void => {
     // A frame can come after a long pause, for example when the tab was hidden. Limit the time
@@ -80,10 +100,11 @@ async function main(): Promise<void> {
     const seconds = Math.min((now - previousTime) / 1000, 0.1);
     previousTime = now;
     app.frame(seconds, context.getCurrentTexture().createView(), canvas.width, canvas.height);
-    // After the last scene, the image stays black, and no more frames are drawn.
-    if (!app.finished) {
-      requestAnimationFrame(frame);
+    if (app.exitRequested) {
+      stop();
+      return;
     }
+    requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
 }

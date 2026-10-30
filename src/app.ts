@@ -26,6 +26,7 @@ import {
   transformPoint,
   viewToWorldDirection,
 } from './mat4.js';
+import { ResultsPage, type SceneResult } from './results-page.js';
 import { SCENES } from './scenes/index.js';
 import type { Scene, SceneSun, SharedObjects, ShipTurn } from './scenes/scene.js';
 import { Ship } from './ship.js';
@@ -231,6 +232,10 @@ export class App {
   private elapsed = 0;
   // True after frame() reports the stats of the last scene at its end.
   private finalStatsReported = false;
+  // The result of each scene, in order, for the results page.
+  private readonly results: SceneResult[] = [];
+  private readonly resultsPage: ResultsPage;
+  private exitPressed = false;
 
   // format is the format of the texture views that frame() draws into.
   constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel) {
@@ -249,6 +254,7 @@ export class App {
     placeShip(this.ship);
     this.fade = new Fade(device, format, DEPTH_FORMAT);
     this.blit = new Blit(device, format);
+    this.resultsPage = new ResultsPage(device, format);
     this.format = format;
     const shared: SharedObjects = {
       device,
@@ -275,10 +281,27 @@ export class App {
     return this.scenes.length;
   }
 
-  // True after the end of the last scene, when all of the results are written. The application can
-  // then stop. Until then, call frame(), so that the GPU times can come from the GPU.
+  // True after the end of the last scene, when all of the results are written. Then frame() draws
+  // the results page, which has an Exit button.
   get finished(): boolean {
     return this.finalStatsReported && this.pendingReports === 0;
+  }
+
+  // True after a click on the Exit button of the results page. The application can then stop.
+  get exitRequested(): boolean {
+    return this.exitPressed;
+  }
+
+  // Give the position of the mouse pointer in pixels of the view, from the upper left.
+  pointerMove(x: number, y: number): void {
+    this.resultsPage.setPointer(x, y);
+  }
+
+  // Give a click of the main mouse button at a position in pixels of the view, from the upper left.
+  click(x: number, y: number): void {
+    if (this.finished && this.resultsPage.isOnExitButton(x, y)) {
+      this.exitPressed = true;
+    }
   }
 
   // True after the end of the last scene.
@@ -314,6 +337,13 @@ export class App {
         this.reportStats(this.currentScene);
       }
       this.finalStatsReported = true;
+    }
+    if (this.finished) {
+      const encoder = this.device.createCommandEncoder();
+      const sceneNames = this.scenes.map((scene) => scene.name);
+      this.resultsPage.draw(encoder, colorView, width, height, sceneNames, this.results);
+      this.device.queue.submit([encoder.finish()]);
+      return;
     }
     const { scene, start, fade } = sceneAt(this.scenes, this.elapsed);
     // Each scene starts with the ship at its start position, with no boost and no heat.
@@ -456,6 +486,7 @@ export class App {
     const write = (gpu: string) =>
       console.log(`Scene "${scene.name}": ${frames} frames in ${seconds.toFixed(1)} s, ${fps.toFixed(1)} fps${gpu}`);
     this.stats = { frames: 0, seconds: 0 };
+    this.results.push({ number: this.scenes.indexOf(scene) + 1, name: scene.name, frames, seconds });
     if (!this.gpuTimer) {
       write('');
       return;

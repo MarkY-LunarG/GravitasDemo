@@ -14,13 +14,17 @@ After 20 seconds, the terrain goes away, and the ship flies through a field of a
 After 40 seconds, the ship falls into the atmosphere of a yellow-brown planet, with re-entry
 heating, clouds, rain, and lightning.
 After 73 seconds, the ship flies over a dark brown land with reflective glass towers.
-After 93 seconds, the benchmark is finished.
+After 93 seconds, the benchmark is finished, and the window shows the results page.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
 
 The desktop target uses [`@kmamal/gpu`](https://github.com/kmamal/gpu) for WebGPU through Google
 Dawn.
-It uses [`@kmamal/sdl`](https://github.com/kmamal/node-sdl) for the window and the keyboard.
+It uses [`@kmamal/sdl`](https://github.com/kmamal/node-sdl) for the window, the keyboard, and the
+mouse.
+The window uses the `mailbox` present mode, so the frame rate is not limited to the display refresh
+rate, and the image does not tear.
+If the surface does not support `mailbox`, the application writes a warning and uses `fifo`.
 The browser target uses the WebGPU API of the browser.
 
 The application uses the prerelease versions `@kmamal/gpu` 1.0.0-6 and `@kmamal/sdl` 1.0.0-5
@@ -71,9 +75,14 @@ At the end of each scene, the application writes the benchmark result of the sce
 Scene "Terrain and ship": 2582 frames in 20.0 s, 129.1 fps, GPU render pass 7.26 ms
 ```
 
-After the last scene, the image fades to black.
-The desktop target writes "The last scene ended." and stops.
-The browser target stops drawing frames.
+After the last scene, the image fades to black, and then the window shows the results page
+(`src/results-page.ts`).
+The page has a table with one row for each scene: the scene number and name, the total number of
+frames, and the frames per second.
+Click the `Exit` button below the table to stop the application.
+In the browser, the page stops drawing and closes the window if the browser lets it.
+Otherwise, it shows a message.
+The page draws its text with a small 5 x 7 pixel font, with no font files.
 A last scene with no end (`duration: Infinity`) writes its result after each 20 seconds instead.
 The GPU time is the time of the main render pass, from timestamp queries.
 The post pass (the copy to the output and screen effects such as the rain on the lens) is not in
@@ -135,6 +144,7 @@ The window close button also exits the desktop application.
 | `src/clouds.ts`      | Blended cloud sprites, sorted far to near, drawn with `drawIndexedIndirect`. |
 | `src/rain.ts`        | Rain on the camera lens: streaks, still drops, and mist, in the post pass. |
 | `src/blit.ts`        | Copies the scene image to the output in the post pass.                |
+| `src/results-page.ts` | The results page: a table of the scene results and an Exit button.  |
 | `src/lightning.ts`   | Lightning flashes at the edges of the screen, with a blend constant.  |
 | `src/reentry.ts`     | The re-entry fire around the ship, and its smoke.                     |
 | `src/gpu-timer.ts`   | GPU time of the render pass, from a timestamp query set.              |
@@ -244,7 +254,7 @@ order:
 | `Atmospheric entry`  | `entry-scene.ts`    | 33 seconds | The ship falls into a planet atmosphere, seen from its right side. The engines are off. |
 | `City flyover`       | `city-scene.ts`     | 20 seconds | The ship flies over dark brown land with reflective glass towers, toward the sun. |
 
-The application stops at the end of the last scene.
+After the last scene, the application shows the results page.
 Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
 fades in from black in the same time.
 At the start of each scene, the ship is at its start position, with no boost and no heat.

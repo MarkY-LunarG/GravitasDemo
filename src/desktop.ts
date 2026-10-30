@@ -2,6 +2,7 @@
 // Dawn (@kmamal/gpu) in Node.js.
 // Press W to toggle between the solid and the wireframe terrain, N to go to the next scene, and
 // ESC to exit. To start at a scene, give its number (from 1): npm start -- --scene=2
+// After the last scene, the window shows the results page. Its Exit button stops the application.
 
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,10 @@ const HEIGHT = 1080;
 // The window surface format. The default format of @kmamal/gpu is rgba16float, which changes
 // the brightness of the colors, so request an 8-bit format with no sRGB encoding.
 const SURFACE_FORMAT = 'bgra8unorm';
+// Mailbox presentation does not wait for the display refresh, so the frame rate of the benchmark
+// is not limited to the refresh rate, and the image does not tear. If the surface does not support
+// it, the renderer uses FIFO (the default of @kmamal/gpu), which waits for the display refresh.
+const PRESENT_MODE = 'mailbox';
 
 // The path is relative to this file, so it is correct from src/ (tsx) and from dist/ (tsc).
 const SHIP_MODEL_PATH = fileURLToPath(new URL('../lunarg-ship/lunarg_ship.glb', import.meta.url));
@@ -44,6 +49,16 @@ Object.assign(globalThis, {
 // freed memory, and the process crashes or hangs, usually after a minute or more.
 const instance = gpu.create([]);
 
+// Make the renderer of the window, with PRESENT_MODE if the surface supports it.
+function makeRenderer(device: Parameters<typeof gpu.renderGPUDeviceToWindow>[0]['device'], window: unknown) {
+  try {
+    return gpu.renderGPUDeviceToWindow({ device, window, format: SURFACE_FORMAT, presentMode: PRESENT_MODE });
+  } catch (error) {
+    console.warn(`The ${PRESENT_MODE} present mode is not available, so the frame rate is limited to the display refresh rate:`, error);
+    return gpu.renderGPUDeviceToWindow({ device, window, format: SURFACE_FORMAT });
+  }
+}
+
 async function main(): Promise<void> {
   const window = sdl.video.createWindow({
     title: 'WebGPU Terrain',
@@ -66,7 +81,7 @@ async function main(): Promise<void> {
     console.error('WebGPU error:', (event as typeof gpu.GPUUncapturedErrorEvent).error.message);
   });
 
-  const renderer = gpu.renderGPUDeviceToWindow({ device: dawnDevice, window, format: SURFACE_FORMAT });
+  const renderer = makeRenderer(dawnDevice, window);
 
   // The @kmamal/gpu typings are not compatible with @webgpu/types, but the objects implement the
   // standard API. Convert the types only here.
@@ -91,6 +106,21 @@ async function main(): Promise<void> {
       app.toggleTerrainRenderMode();
     } else if (event.key === 'n') {
       app.nextScene();
+    }
+  });
+
+  // The mouse positions are in window units. The view has the size of the window in pixels, which
+  // is larger on a high-density display.
+  const toPixels = (x: number, y: number): [number, number] => [
+    (x * window.pixelWidth) / window.width,
+    (y * window.pixelHeight) / window.height,
+  ];
+  window.on('mouseMove', (event) => {
+    app.pointerMove(...toPixels(event.x, event.y));
+  });
+  window.on('mouseButtonDown', (event) => {
+    if (event.button === sdl.mouse.BUTTON.LEFT) {
+      app.click(...toPixels(event.x, event.y));
     }
   });
 
@@ -134,8 +164,8 @@ async function main(): Promise<void> {
     const view = renderer.getCurrentTextureView() as unknown as GPUTextureView;
     app.frame(seconds, view, window.pixelWidth, window.pixelHeight);
     renderer.swap();
-    if (app.finished) {
-      exit('The last scene ended.');
+    if (app.exitRequested) {
+      exit('Exit pressed.');
     }
     // Let Node.js process the window events between frames.
     await new Promise((resolve) => setImmediate(resolve));
