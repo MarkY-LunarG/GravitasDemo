@@ -62,7 +62,7 @@ export function createAsteroidScene(shared: SharedObjects): Scene {
   });
   return {
     name: 'Asteroids and ship',
-    duration: 40,
+    duration: 20,
     cameraAngle: 0,
     update({ encoder, seconds, sceneTime, speedScale, viewProjection, cameraPosition }) {
       const offset: Vec3 = SHIP_PATH.offset(sceneTime);

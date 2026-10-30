@@ -171,7 +171,8 @@ function computeProjection(aspect: number): Float32Array {
 const TRANSITION_FADE_TIME = 0.5;
 
 // The scene at a time in seconds, the start time of the scene, and the amount of the fade to black
-// at that time (0 to 1). After the last scene ends, the last scene continues.
+// at that time (0 to 1). A last scene with a finite duration fades to black at its end. After the
+// last scene ends, it continues, but stays black.
 function sceneAt(scenes: readonly Scene[], seconds: number): { scene: Scene; start: number; fade: number } {
   let start = 0;
   for (let index = 0; index < scenes.length; ++index) {
@@ -182,7 +183,7 @@ function sceneAt(scenes: readonly Scene[], seconds: number): { scene: Scene; sta
       if (index > 0) {
         fade = Math.max(fade, 1 - (seconds - start) / TRANSITION_FADE_TIME);
       }
-      if (index < scenes.length - 1) {
+      if (index < scenes.length - 1 || scene.duration !== Infinity) {
         fade = Math.max(fade, 1 - (end - seconds) / TRANSITION_FADE_TIME);
       }
       return { scene, start, fade: Math.max(0, Math.min(1, fade)) };
@@ -196,8 +197,6 @@ function sceneAt(scenes: readonly Scene[], seconds: number): { scene: Scene; sta
 interface SceneStats {
   frames: number;
   seconds: number;
-  gpuMilliseconds: number;
-  gpuFrames: number;
 }
 
 // A scene writes its result when it ends. A scene with no end writes its result after this many
@@ -208,7 +207,9 @@ export class App {
   private readonly device: GPUDevice;
   // Null if the device cannot write timestamps. Then the results have no GPU time.
   private readonly gpuTimer: GpuTimer | null;
-  private stats: SceneStats = { frames: 0, seconds: 0, gpuMilliseconds: 0, gpuFrames: 0 };
+  private stats: SceneStats = { frames: 0, seconds: 0 };
+  // The number of results that wait for their GPU time.
+  private pendingReports = 0;
   private readonly terrain: Terrain;
   private readonly sun: DirectionalLight;
   // The sun of the scenes that do not have their own sun.
@@ -224,8 +225,12 @@ export class App {
   private sceneView: GPUTextureView | null = null;
   private currentScene: Scene | null = null;
   private depthTexture: GPUTexture | null = null;
+  // The view of depthTexture. It is made one time for each depth texture, not in each frame.
+  private depthView: GPUTextureView | null = null;
   // The time in seconds since the first frame. The camera path and the scene sequence use it.
   private elapsed = 0;
+  // True after frame() reports the stats of the last scene at its end.
+  private finalStatsReported = false;
 
   // format is the format of the texture views that frame() draws into.
   constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel) {
@@ -270,6 +275,17 @@ export class App {
     return this.scenes.length;
   }
 
+  // True after the end of the last scene, when all of the results are written. The application can
+  // then stop. Until then, call frame(), so that the GPU times can come from the GPU.
+  get finished(): boolean {
+    return this.finalStatsReported && this.pendingReports === 0;
+  }
+
+  // True after the end of the last scene.
+  private get pastEnd(): boolean {
+    return this.elapsed >= this.scenes.reduce((sum, scene) => sum + scene.duration, 0);
+  }
+
   // Go to the start of a scene. The scene numbers start at 1. The scene starts as after a normal
   // transition: the ship is at its start position, and the scene time is 0.
   jumpToScene(sceneNumber: number): void {
@@ -293,6 +309,12 @@ export class App {
   // colorView. width and height are the size of colorView in pixels.
   frame(seconds: number, colorView: GPUTextureView, width: number, height: number): void {
     this.elapsed += seconds;
+    if (this.pastEnd) {
+      if (!this.finalStatsReported && this.currentScene) {
+        this.reportStats(this.currentScene);
+      }
+      this.finalStatsReported = true;
+    }
     const { scene, start, fade } = sceneAt(this.scenes, this.elapsed);
     // Each scene starts with the ship at its start position, with no boost and no heat.
     if (scene !== this.currentScene) {
@@ -376,6 +398,7 @@ export class App {
         format: DEPTH_FORMAT,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
+      this.depthView = this.depthTexture.createView();
       this.sceneTexture?.destroy();
       this.sceneTexture = this.device.createTexture({
         size: [width, height],
@@ -396,7 +419,7 @@ export class App {
         },
       ],
       depthStencilAttachment: {
-        view: this.depthTexture.createView(),
+        view: this.depthView!,
         depthClearValue: 1.0,
         depthLoadOp: 'clear',
         depthStoreOp: 'discard',
@@ -423,20 +446,26 @@ export class App {
     post.end();
     this.gpuTimer?.resolve(encoder);
     this.device.queue.submit([encoder.finish()]);
-    // The GPU time comes later. It goes to the stats of the scene that is current at that time,
-    // which is the same scene, except for a frame or two at a scene change.
-    this.gpuTimer?.read((milliseconds) => {
-      this.stats.gpuMilliseconds += milliseconds;
-      this.stats.gpuFrames += 1;
+  }
+
+  // Write the benchmark result of a scene to the console, and start new stats. With a GPU timer,
+  // the result is written when the GPU time of the submitted frames of the scene is available.
+  private reportStats(scene: Scene): void {
+    const { frames, seconds } = this.stats;
+    const fps = seconds > 0 ? frames / seconds : 0;
+    const write = (gpu: string) =>
+      console.log(`Scene "${scene.name}": ${frames} frames in ${seconds.toFixed(1)} s, ${fps.toFixed(1)} fps${gpu}`);
+    this.stats = { frames: 0, seconds: 0 };
+    if (!this.gpuTimer) {
+      write('');
+      return;
+    }
+    this.pendingReports += 1;
+    this.gpuTimer.readTotal((milliseconds, gpuFrames) => {
+      this.pendingReports -= 1;
+      write(gpuFrames > 0 ? `, GPU render pass ${(milliseconds / gpuFrames).toFixed(2)} ms` : '');
     });
   }
 
-  // Write the benchmark result of a scene to the console, and start new stats.
-  private reportStats(scene: Scene): void {
-    const { frames, seconds, gpuMilliseconds, gpuFrames } = this.stats;
-    const fps = seconds > 0 ? frames / seconds : 0;
-    const gpu = gpuFrames > 0 ? `, GPU render pass ${(gpuMilliseconds / gpuFrames).toFixed(2)} ms` : '';
-    console.log(`Scene "${scene.name}": ${frames} frames in ${seconds.toFixed(1)} s, ${fps.toFixed(1)} fps${gpu}`);
-    this.stats = { frames: 0, seconds: 0, gpuMilliseconds: 0, gpuFrames: 0 };
-  }
+
 }

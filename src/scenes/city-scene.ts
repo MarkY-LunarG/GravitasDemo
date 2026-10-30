@@ -48,7 +48,7 @@ export function createCityScene(shared: SharedObjects): Scene {
   const sunDirection: Vec3 = [toSun[0] / length, toSun[1] / length, toSun[2] / length];
   return {
     name: 'City flyover',
-    duration: Infinity,
+    duration: 20,
     cameraAngle: -90,
     cameraLookAhead: LOOK_AHEAD,
     sun: {

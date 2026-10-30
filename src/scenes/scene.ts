@@ -71,7 +71,7 @@ export interface FrameInfo {
 export interface Scene {
   readonly name: string;
   // The duration in seconds. The last scene can have a duration of Infinity, so that it continues
-  // until the application stops.
+  // until the application stops. Otherwise, the App is finished at the end of the last scene.
   readonly duration: number;
   // False for a scene with the engines off. The engines are on or off at the start of the scene.
   readonly engines?: boolean;

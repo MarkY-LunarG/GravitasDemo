@@ -7,7 +7,7 @@ import type { Scene, SharedObjects } from './scene.js';
 
 // The speed at which the terrain features move toward the ship, in meters per second.
 const TERRAIN_SPEED = 1200;
-const DURATION = 40;
+const DURATION = 20;
 // The ship flies off with a constant acceleration in meters per second squared. In 3 seconds, it
 // goes approximately 2.7 km, so it is very small before the fade to black.
 const FLY_OFF_TIME = 3;

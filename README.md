@@ -10,10 +10,11 @@ The camera is 500 m above the ground and tilts down.
 The hills and craters move toward the ship, but the ship does not move.
 The camera moves around the ship on a path that repeats every 20 seconds.
 The application is a benchmark with a sequence of scenes.
-After 40 seconds, the terrain goes away, and the ship flies through a field of asteroids.
-After 80 seconds, the ship falls into the atmosphere of a yellow-brown planet, with re-entry
+After 20 seconds, the terrain goes away, and the ship flies through a field of asteroids.
+After 40 seconds, the ship falls into the atmosphere of a yellow-brown planet, with re-entry
 heating, clouds, rain, and lightning.
-After 120 seconds, the ship flies over a dark brown land with reflective glass towers.
+After 73 seconds, the ship flies over a dark brown land with reflective glass towers.
+After 93 seconds, the benchmark is finished.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
 
@@ -67,15 +68,23 @@ In both targets, the `N` key goes to the next scene.
 At the end of each scene, the application writes the benchmark result of the scene to the console:
 
 ```text
-Scene "Terrain and ship": 5163 frames in 40.0 s, 129.1 fps, GPU render pass 7.26 ms
+Scene "Terrain and ship": 2582 frames in 20.0 s, 129.1 fps, GPU render pass 7.26 ms
 ```
 
-The last scene has no end, so it writes its result after each 20 seconds.
+After the last scene, the image fades to black.
+The desktop target writes "The last scene ended." and stops.
+The browser target stops drawing frames.
+A last scene with no end (`duration: Infinity`) writes its result after each 20 seconds instead.
 The GPU time is the time of the main render pass, from timestamp queries.
 The post pass (the copy to the output and screen effects such as the rain on the lens) is not in
 the GPU time.
 It is only available when the adapter has the `timestamp-query` feature.
 Compute passes, for example the asteroid update, are not in the GPU time.
+The GPU time is the average of all of the frames of the scene.
+The GPU adds the time of each frame to a total, with a small compute pass.
+The application reads the total one time at the end of the scene, so the result of a scene comes a
+few frames after the scene ends.
+If you stop the application before the end, it does not write the GPU times.
 
 ## Build
 
@@ -230,12 +239,12 @@ order:
 
 | Scene                | File                | Duration   | Contents                         |
 | -------------------- | ------------------- | ---------- | -------------------------------- |
-| `Terrain and ship`   | `terrain-scene.ts`  | 40 seconds | The terrain, the ship, and stars. |
-| `Asteroids and ship` | `asteroid-scene.ts` | 40 seconds | The ship moves around the asteroids, with a planet, a nebula, and stars. The camera does not move. |
-| `Atmospheric entry`  | `entry-scene.ts`    | 40 seconds | The ship falls into a planet atmosphere, seen from its right side. The engines are off. |
-| `City flyover`       | `city-scene.ts`     | No end     | The ship flies over dark brown land with reflective glass towers, toward the sun. |
+| `Terrain and ship`   | `terrain-scene.ts`  | 20 seconds | The terrain, the ship, and stars. |
+| `Asteroids and ship` | `asteroid-scene.ts` | 20 seconds | The ship moves around the asteroids, with a planet, a nebula, and stars. The camera does not move. |
+| `Atmospheric entry`  | `entry-scene.ts`    | 33 seconds | The ship falls into a planet atmosphere, seen from its right side. The engines are off. |
+| `City flyover`       | `city-scene.ts`     | 20 seconds | The ship flies over dark brown land with reflective glass towers, toward the sun. |
 
-The last scene continues until you stop the application.
+The application stops at the end of the last scene.
 Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
 fades in from black in the same time.
 At the start of each scene, the ship is at its start position, with no boost and no heat.
@@ -585,12 +594,15 @@ It throws an error for other features, for example textures, skins, or STEP inte
 
 ## Known issues
 
-- With `@kmamal/gpu` 1.0.0-6, a `mapAsync()` in each frame sometimes stops the desktop application
-  with a native error (`std::system_error`, or a `pthread_mutex_lock` assertion), or makes it hang.
-  Thus the GPU timer reads its timestamps for only one frame in 15, with one buffer mapped at a
-  time.
-  With this change, two full runs had no errors, but the cause is in the native code, so it is
-  possible that the error still occurs.
+- With `@kmamal/gpu` 1.0.0-6, the device and the async operations do not keep the `GPU` object
+  (from `gpu.create()`) alive.
+  If the garbage collector frees it, the binding frees the Dawn instance.
+  Then the next poll of Dawn (`InstanceBase::ProcessEvents`, for a pending `mapAsync()`) uses
+  freed memory.
+  The process stops with a native error (a segmentation fault, `std::system_error`, or a glibc
+  `pthread_mutex_lock` or `tpp.c` assertion), or it hangs.
+  This usually occurs only after a minute or more, so it is a problem in a full benchmark run.
+  Thus `src/desktop.ts` keeps the `GPU` object at module scope.
 - At startup, Dawn shows two warnings about `maxDynamicUniformBuffersPerPipelineLayout` and
   `maxDynamicStorageBuffersPerPipelineLayout`.
   You can ignore them.

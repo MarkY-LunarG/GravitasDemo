@@ -37,6 +37,13 @@ Object.assign(globalThis, {
   GPUColorWrite: gpu.GPUColorWrite,
 });
 
+// The Dawn instance. Keep it at module scope, so that it lives as long as the process. The device
+// and the async operations (for example mapAsync) use it, but they do not keep the GPU object
+// alive in JavaScript. If the garbage collector frees the GPU object, @kmamal/gpu frees the Dawn
+// instance. Then the next poll of Dawn (InstanceBase::ProcessEvents, for a pending mapAsync) uses
+// freed memory, and the process crashes or hangs, usually after a minute or more.
+const instance = gpu.create([]);
+
 async function main(): Promise<void> {
   const window = sdl.video.createWindow({
     title: 'WebGPU Terrain',
@@ -46,7 +53,6 @@ async function main(): Promise<void> {
     webgpu: true,
   });
 
-  const instance = gpu.create([]);
   const adapter = await instance.requestAdapter();
   if (!adapter) {
     throw new Error('No WebGPU adapter is available');
@@ -104,22 +110,33 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
-  window.on('close', () => {
-    console.log('The window closed.');
+  // The window close event also comes while the process exits, so exit only one time.
+  let exiting = false;
+  const exit = (message: string): void => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    console.log(message);
     dawnDevice.destroy();
     // Exit now. If Node.js releases the Dawn objects in its normal shutdown,
     // Dawn fails a RefCounted assertion and the process crashes.
     process.exit(0);
-  });
+  };
+  window.on('close', () => exit('The window closed.'));
 
   let previousTime = performance.now();
   while (!window.destroyed) {
     const now = performance.now();
     const seconds = (now - previousTime) / 1000;
     previousTime = now;
-    const surface = renderer.getCurrentTexture();
-    app.frame(seconds, renderer.getCurrentTextureView() as unknown as GPUTextureView, surface.width, surface.height);
+    // The size of the surface texture is the size of the window in pixels.
+    const view = renderer.getCurrentTextureView() as unknown as GPUTextureView;
+    app.frame(seconds, view, window.pixelWidth, window.pixelHeight);
     renderer.swap();
+    if (app.finished) {
+      exit('The last scene ended.');
+    }
     // Let Node.js process the window events between frames.
     await new Promise((resolve) => setImmediate(resolve));
   }

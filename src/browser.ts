@@ -80,7 +80,10 @@ async function main(): Promise<void> {
     const seconds = Math.min((now - previousTime) / 1000, 0.1);
     previousTime = now;
     app.frame(seconds, context.getCurrentTexture().createView(), canvas.width, canvas.height);
-    requestAnimationFrame(frame);
+    // After the last scene, the image stays black, and no more frames are drawn.
+    if (!app.finished) {
+      requestAnimationFrame(frame);
+    }
   };
   requestAnimationFrame(frame);
 }

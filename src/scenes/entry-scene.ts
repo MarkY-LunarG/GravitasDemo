@@ -8,7 +8,7 @@
 //   starts. The ship shakes with the heat and in the rain.
 // - From 10: clouds come past the ship. From 18: rain on the camera lens, which the air pushes
 //   from the front of the ship to its back. From 20: lightning around the edges.
-// After 30 seconds, the rain, the clouds, and the lightning continue.
+// From 26 seconds to the end at 33 seconds, the rain, the clouds, and the lightning continue.
 
 import { Clouds } from '../clouds.js';
 import { Lightning } from '../lightning.js';
@@ -47,7 +47,7 @@ export function createEntryScene(shared: SharedObjects): Scene {
   const reentry = new Reentry(device, format, depthFormat);
   return {
     name: 'Atmospheric entry',
-    duration: 40,
+    duration: 33,
     cameraAngle: -90,
     // The ship falls into the atmosphere with its engines off.
     engines: false,
