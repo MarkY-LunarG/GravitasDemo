@@ -690,6 +690,8 @@ These results are from Linux (Wayland, AMD Radeon 890M, Mesa 26.2.5).
   as the frames of the TypeScript version, pixel for pixel: a frame every 2 seconds of the intro and
   of each scene, and four frames of one run from the start to the city scene.
   The results page was the same for the same results.
+  After the parity check, the results page changed: it selects its text scale from the size of the
+  table and the title, so that the page fits in the view.
   The parity tools are in `scripts/parity/` of commit `41209d1`.
 - Frame rate: one real-time run of each version, in the same 2880 x 1620 window, with the C++
   release build:
@@ -717,9 +719,6 @@ Not verified:
 
 ## Known issues
 
-- The results page selects its text scale from the height of the view only.
-  In a view that is wide for its height, for example 2560 x 1508, the table is wider than the
-  view, and its sides are cut off.
 - At startup, Dawn writes two warnings about `maxDynamicUniformBuffersPerPipelineLayout` and
   `maxDynamicStorageBuffersPerPipelineLayout`.
   You can ignore them.

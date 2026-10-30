@@ -113,6 +113,11 @@ constexpr uint32_t kCharacterCount = std::size(kGlyphs);
 constexpr uint32_t kSolid = kCharacterCount + 1;
 constexpr uint32_t kBox = kCharacterCount;
 
+// The padding in a table cell and around the page, and the space above and below the text of a
+// row, in glyph pixels.
+constexpr double kPadding = 8;
+constexpr double kRowSpace = 6;
+
 // The quads: x, y, width, and height in pixels (from the upper left), the color, and the glyph.
 constexpr size_t kInstanceFloats = 12;
 constexpr size_t kMaxInstances = 4096;
@@ -229,11 +234,6 @@ void ResultsPage::Layout(uint32_t width, uint32_t height,
                          const std::vector<std::string>& sceneNames,
                          const std::vector<SceneResult>& results) {
     quadCount_ = 0;
-    // The size of one glyph pixel in screen pixels. It is an integer, so the text is sharp.
-    const double scale = std::max(1.0, std::floor(std::min(height / 200.0, width / 320.0)));
-    const double titleScale = scale * 2;
-    const double rowHeight = kCellHeight * scale + 6 * scale;
-    const double padding = 8 * scale;
 
     const std::array<std::string, 3> headers = {"Scene", "Total frames", "Frames per second"};
     // One row for each scene. If a scene has more than one result (for example, after the N key
@@ -258,6 +258,30 @@ void ResultsPage::Layout(uint32_t width, uint32_t height,
                 {label, std::to_string(frames), ToFixed1(seconds > 0 ? frames / seconds : 0.0)});
         }
     }
+    const std::string title = "Benchmark results";
+
+    // The size of one glyph pixel in screen pixels. It is an integer, so the text is sharp. It is
+    // the largest scale at which the page fits in the view, with a margin of one padding at each
+    // side. All sizes of the page are proportional to the scale, so measure them at scale 1.
+    // The title has twice the scale of the table.
+    double tableUnits = 0.0;
+    for (size_t column = 0; column < 3; ++column) {
+        double widest = TextWidth(headers[column], 1.0);
+        for (const auto& row : rows) {
+            widest = std::max(widest, TextWidth(row[column], 1.0));
+        }
+        tableUnits += widest + 2 * kPadding;
+    }
+    const double widthUnits = std::max(tableUnits, TextWidth(title, 2.0)) + 2 * kPadding;
+    const double rowUnits = kCellHeight + kRowSpace;
+    const double heightUnits = kCellHeight * 2 + 3 * rowUnits + rowUnits * (rows.size() + 1) +
+                               3 * rowUnits + rowUnits + 2 + 2 * kPadding;
+    const double scale =
+        std::max(1.0, std::floor(std::min(width / widthUnits, height / heightUnits)));
+    const double titleScale = scale * 2;
+    const double rowHeight = rowUnits * scale;
+    const double padding = kPadding * scale;
+
     // The width of each column: the widest text, and padding at the two sides.
     std::array<double, 3> columnWidths;
     for (size_t column = 0; column < 3; ++column) {
@@ -269,7 +293,6 @@ void ResultsPage::Layout(uint32_t width, uint32_t height,
     }
     const double tableWidth = columnWidths[0] + columnWidths[1] + columnWidths[2];
     const double tableHeight = rowHeight * (rows.size() + 1);
-    const std::string title = "Benchmark results";
     const double titleHeight = kCellHeight * titleScale;
     const double buttonHeight = rowHeight + 2 * scale;
     const double gap = 3 * rowHeight;
