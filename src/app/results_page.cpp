@@ -13,8 +13,8 @@ namespace hackathon {
 namespace {
 
 // The glyphs: 7 rows of 5 pixels, '#' is on. A character that is not here shows as a box. The
-// order is the order of Object.keys() in the TypeScript version: the digits first, then the other
-// characters, so that the glyph indices are the same.
+// digits are first, then the other characters, as Object.keys() gave them in the earlier
+// TypeScript version.
 struct Glyph {
     char character;
     const char* pattern;

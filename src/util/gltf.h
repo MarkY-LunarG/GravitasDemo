@@ -4,8 +4,7 @@
 // transforms, material base colors, KHR_materials_unlit, and LINEAR animation channels. It gives
 // an error for other features, so that a model does not draw incorrectly without a message.
 //
-// As in the TypeScript version, the vertex data and the keyframes are float, and the transforms
-// and the weights are double.
+// The vertex data and the keyframes are float, and the transforms and the weights are double.
 
 #pragma once
 

@@ -57,7 +57,8 @@ Clouds::Clouds(const wgpu::Device& device, wgpu::TextureFormat format,
     Random random(kRandomSeed);
     for (size_t i = 0; i < kCloudCount; ++i) {
         CloudState cloud;
-        // The order of the random values is the order of the TypeScript version.
+        // Do not change the order of the random values: it sets the contents of the scene, so a
+        // different order gives a different benchmark.
         cloud.local[0] = random.Between(kBoxRight[0], kBoxRight[1]);
         cloud.local[1] = random.Between(kBoxUp[0], kBoxUp[1]);
         cloud.local[2] = random.Between(kBoxHeading[0], kBoxHeading[1]);

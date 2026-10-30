@@ -1,4 +1,5 @@
-// Number text that matches the TypeScript version.
+// Number text with the rounding of JavaScript, as the results showed it in the earlier TypeScript
+// version.
 
 #pragma once
 

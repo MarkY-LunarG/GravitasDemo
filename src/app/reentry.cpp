@@ -146,7 +146,8 @@ void Reentry::Update(double seconds, double time, double level, const Vec3& ship
     const Vec3 right = {-heading[2], 0.0, heading[0]};
     while (emission_ >= 1.0 && puffs_.size() < kSmokeCount) {
         emission_ -= 1.0;
-        // The order of the random values is the order of the TypeScript version.
+        // Do not change the order of the random values: it sets the contents of the scene, so a
+        // different order gives a different benchmark.
         const double distance = kSmokeStart[0] + (kSmokeStart[1] - kSmokeStart[0]) * random_.Next();
         const double across = (random_.Next() * 2 - 1) * 25;
         const double up = (random_.Next() * 2 - 1) * 20;

@@ -1,8 +1,8 @@
 // Make the WGSL code of a shader module from the embedded .wgsl files (generated/shaders.h).
 //
-// The TypeScript version puts the values of its constants into the shader text. Here, the C++ code
-// defines each constant one time, and WgslConstants writes WGSL const declarations from them. The
-// .wgsl files use the names. Code that is generated from data goes into a {{NAME}} placeholder.
+// The C++ code defines each constant one time, and WgslConstants writes WGSL const declarations
+// from them. The .wgsl files use the names. Code that is generated from data goes into a {{NAME}}
+// placeholder.
 
 #pragma once
 

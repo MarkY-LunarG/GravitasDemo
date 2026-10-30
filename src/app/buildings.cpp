@@ -157,8 +157,9 @@ Buildings::Buildings(const wgpu::Device& device, wgpu::TextureFormat format,
     };
     // The yaw that puts the local x axis of a tower along the heading.
     const double headingYaw = std::atan2(-heading[2], heading[0]);
-    // The order of the random values is the order of the TypeScript version. A front tower is
-    // always glass, so it takes no random value for the glass.
+    // Do not change the order of the random values: it sets the contents of the scene, so a
+    // different order gives a different benchmark.
+    // A front tower is always glass, so it takes no random value for the glass.
     for (size_t i = 0; i < kTowerCount; ++i) {
         const bool front = i < kFrontCount;
         const bool glass = front || random.Next() < 0.6;

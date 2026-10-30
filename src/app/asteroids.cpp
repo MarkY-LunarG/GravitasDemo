@@ -129,7 +129,8 @@ Icosphere MakeIcosphere(int subdivisions) {
         };
         std::vector<std::array<uint32_t, 3>> next;
         for (const auto& [a, b, c] : triangles) {
-            // The same order of new vertices as the TypeScript version.
+            // Do not change the order of the new vertices: it sets the vertex numbers of the
+            // shapes.
             const uint32_t ab = midpoint(a, b);
             const uint32_t bc = midpoint(b, c);
             const uint32_t ca = midpoint(c, a);
@@ -405,7 +406,8 @@ std::vector<float> Asteroids::MakeAsteroids(const ShipPath& shipPath,
         // The cube of a random number makes small radii much more common than large radii.
         const double radius = kAsteroidRadius[0] * std::pow(kAsteroidRadius[1] / kAsteroidRadius[0],
                                                             std::pow(random.Next(), 3));
-        // The order of the random values is the order of the TypeScript version.
+        // Do not change the order of the random values: it sets the contents of the scene, so a
+        // different order gives a different benchmark.
         auto centered = [&random](const std::array<double, 2>& range) {
             const double side = random.Next() < 0.5 ? range[0] : range[1];
             return side * std::pow(random.Next(), kBoxCenterBias);

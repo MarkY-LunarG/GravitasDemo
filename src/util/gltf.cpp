@@ -87,8 +87,7 @@ bool ReadPrimitive(const cgltf_data* data, const cgltf_mesh& mesh, const cgltf_p
         return false;
     }
     if (colors) {
-        // The TypeScript loader reads the colors as they are, so it supports only RGBA float
-        // colors.
+        // The colors go to the GPU as they are, so only RGBA float colors are supported.
         if (colors->type != cgltf_type_vec4 || !ReadFloats(colors, primitive.colors, error)) {
             error = where + "vertex colors must be RGBA floats";
             return false;

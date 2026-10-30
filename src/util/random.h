@@ -1,6 +1,6 @@
 // A small random number generator with a fixed seed (mulberry32), so that each run of the benchmark
-// is the same. It gives the same values as the mulberry32 functions of the TypeScript version:
-// JavaScript does those operations on 32-bit integers, which wrap as uint32_t does.
+// is the same. The 32-bit operations wrap, as uint32_t does, and as the JavaScript mulberry32
+// function of the earlier TypeScript version did.
 
 #pragma once
 

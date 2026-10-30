@@ -7,7 +7,7 @@
 namespace hackathon {
 
 std::string WgslFloat(double value) {
-    // 17 significant digits give the same double, and thus the same f32, as the TypeScript text.
+    // 17 significant digits give back the same double, and thus the same f32.
     char buffer[32];
     std::snprintf(buffer, sizeof(buffer), "%.17g", value);
     std::string text = buffer;

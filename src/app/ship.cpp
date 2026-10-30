@@ -820,7 +820,7 @@ bool Ship::MakeStreaks(std::vector<float>& data, std::string& error) const {
     auto restMatrix = [&](int index) {
         Mat4 matrix = Identity();
         bool first = true;
-        // Multiply from the root down, as the recursion of the TypeScript version does.
+        // Multiply from the root down, so that each product is rounded to float in the same order.
         std::vector<int> chain;
         for (int node = index; node >= 0; node = parents[node]) {
             chain.push_back(node);
@@ -875,7 +875,8 @@ bool Ship::MakeStreaks(std::vector<float>& data, std::string& error) const {
         const Point& point = points[static_cast<size_t>(std::floor(random.Next() * points.size()))];
         Set(data, streak * kStreakFloats, point.position);
         Set(data, streak * kStreakFloats + 3, point.normal);
-        // The order of the random values is the order of the TypeScript version.
+        // Do not change the order of the random values: it sets the contents of the scene, so a
+        // different order gives a different benchmark.
         const double length = random.Between(kStreakLength[0], kStreakLength[1]);
         const double width = random.Between(kStreakWidth[0], kStreakWidth[1]);
         const double seed = random.Next() * 100;

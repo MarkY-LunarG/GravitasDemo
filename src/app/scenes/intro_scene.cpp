@@ -64,8 +64,8 @@ double Smoothstep(double edge0, double edge1, double x) {
     return t * t * (3 - 2 * t);
 }
 
-// A random value from 0 to 1 for two integers, the same each time. The 32-bit operations wrap as
-// Math.imul() does in the TypeScript version.
+// A random value from 0 to 1 for two integers, the same each time. The 32-bit multiplications
+// wrap, as JavaScript Math.imul() does.
 double Hash(int64_t a, int64_t b) {
     uint32_t x = static_cast<uint32_t>(a + kRandomSeed) * 0x9e3779b1u ^
                  static_cast<uint32_t>(b + 1) * 0x85ebca6bu;
@@ -194,7 +194,8 @@ class IntroScene : public Scene {
                           2.5 * flash;
 
         // The ship: in the place of the G after the flash, then it turns around and flies away.
-        // As in the TypeScript version, the engines ignite only the first time the intro plays.
+        // The engines ignite only the first time the intro plays (see "Known issues" in
+        // README.md).
         if (afterFlash && !enginesOn_ && t >= kIgniteTime) {
             enginesOn_ = true;
             shared_.ship->SetEnginesOn(true);

@@ -85,7 +85,7 @@ bool Platform::ConfigureSurface(const wgpu::Adapter& adapter, const wgpu::Device
     }
 
     // The browser lists its preferred format first. On the desktop, use an 8-bit format with no
-    // sRGB encoding, as the TypeScript desktop target does.
+    // sRGB encoding, which the colors of the shaders are for.
     wgpu::TextureFormat format = capabilities.formats[0];
 #ifndef __EMSCRIPTEN__
     if (Contains(capabilities.formats, capabilities.formatCount, wgpu::TextureFormat::BGRA8Unorm)) {

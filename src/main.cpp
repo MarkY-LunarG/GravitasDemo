@@ -47,7 +47,7 @@ class Program {
                 app_->Click(x, y);
             }
         };
-        platform_ = Platform::Create("WebGPU Hackathon", kWidth, kHeight, std::move(events));
+        platform_ = Platform::Create("Gravitas Demo", kWidth, kHeight, std::move(events));
         if (!platform_) {
             return false;
         }
@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
     RunMainLoop([program] { return program->Frame(); },
                 [program]() mutable {
 #ifdef __EMSCRIPTEN__
-                    // A page cannot close itself, so tell the user, as the TypeScript version does.
+                    // A page cannot close itself, so tell the user.
                     Platform::ShowMessage("The benchmark has stopped. You can close this page.");
 #else
                     std::printf("The benchmark has stopped.\n");

@@ -1,10 +1,9 @@
 // Minimal 4x4 matrix and quaternion functions. Matrices are column-major, as WGSL expects. The
 // coordinate system is right-handed with +Y up, and the clip-space depth is [0, 1], as in WebGPU.
 //
-// The TypeScript version keeps vectors as JavaScript numbers and matrices as Float32Array. These
-// types do the same: Vec3 and Quat are double, and Mat4 is float. The functions calculate in double
-// and round to float only where the TypeScript version stores into a Float32Array, so both versions
-// give the same values.
+// Vec3 and Quat are double, and Mat4 is float. The functions calculate in double and round to
+// float only when they store a matrix. This is the arithmetic of the earlier TypeScript version
+// (JavaScript numbers and Float32Array), and it gave the same images as that version.
 
 #pragma once
 
