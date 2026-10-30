@@ -1,15 +1,19 @@
 // The desktop target: show the scene (src/app.ts) in an SDL window with WebGPU through Google
 // Dawn (@kmamal/gpu) in Node.js.
 // Press W to toggle between the solid and the wireframe terrain, N to go to the next scene, and
-// ESC to exit. To start at a scene, give its number (from 1): npm start -- --scene=2
+// ESC to exit. The intro comes first. To start at a benchmark scene with no intro, give its number
+// (from 1): npm start -- --scene=2
 // After the last scene, the window shows the results page. Its Exit button stops the application.
 
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import gpu from '@kmamal/gpu';
 import sdl from '@kmamal/sdl';
 import { App } from './app.js';
 import { parseGlb } from './gltf.js';
+import { INTRO_IMAGE_FILES, type IntroImages } from './intro-logo.js';
+import { decodePng } from './png.js';
 
 const WIDTH = 1920;
 const HEIGHT = 1080;
@@ -24,12 +28,24 @@ const PRESENT_MODE = 'mailbox';
 
 // The path is relative to this file, so it is correct from src/ (tsx) and from dist/ (tsc).
 const SHIP_MODEL_PATH = fileURLToPath(new URL('../lunarg-ship/lunarg_ship.glb', import.meta.url));
+const TEXTURES_DIRECTORY = fileURLToPath(new URL('../textures/', import.meta.url));
 
-// The scene number from the --scene=<number> argument, or 1.
+// Read and decode the images of the intro.
+function loadIntroImages(): IntroImages {
+  const load = (file: string) =>
+    decodePng(new Uint8Array(fs.readFileSync(TEXTURES_DIRECTORY + file)), (data) => new Uint8Array(zlib.inflateSync(data)));
+  return {
+    colorLogo: load(INTRO_IMAGE_FILES.colorLogo),
+    neon: load(INTRO_IMAGE_FILES.neon),
+    neonTube: load(INTRO_IMAGE_FILES.neonTube),
+  };
+}
+
+// The benchmark scene number from the --scene=<number> argument, or 0 (the intro) with no argument.
 function startScene(): number {
   const argument = process.argv.find((value) => value.startsWith('--scene='));
-  const number = argument ? Number(argument.slice('--scene='.length)) : 1;
-  return Number.isFinite(number) && number >= 1 ? number : 1;
+  const number = argument ? Number(argument.slice('--scene='.length)) : 0;
+  return Number.isFinite(number) && number >= 1 ? number : 0;
 }
 
 // The shared code uses the standard WebGPU global constants, as in a browser. @kmamal/gpu
@@ -88,7 +104,12 @@ async function main(): Promise<void> {
   const device = dawnDevice as unknown as GPUDevice;
   const shipFile = fs.readFileSync(SHIP_MODEL_PATH);
   const shipData = shipFile.buffer.slice(shipFile.byteOffset, shipFile.byteOffset + shipFile.byteLength);
-  const app = new App(device, renderer.getPreferredFormat() as GPUTextureFormat, parseGlb(shipData as ArrayBuffer));
+  const app = new App(
+    device,
+    renderer.getPreferredFormat() as GPUTextureFormat,
+    parseGlb(shipData as ArrayBuffer),
+    loadIntroImages(),
+  );
   app.jumpToScene(startScene());
 
   window.on('resize', () => {

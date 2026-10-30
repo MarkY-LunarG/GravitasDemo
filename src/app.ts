@@ -26,8 +26,10 @@ import {
   transformPoint,
   viewToWorldDirection,
 } from './mat4.js';
+import { type IntroImages } from './intro-logo.js';
 import { ResultsPage, type SceneResult } from './results-page.js';
 import { SCENES } from './scenes/index.js';
+import { createIntroScene } from './scenes/intro-scene.js';
 import type { Scene, SceneSun, SharedObjects, ShipTurn } from './scenes/scene.js';
 import { Ship } from './ship.js';
 import { DEFAULT_TERRAIN_STYLE, TERRAIN_RADIUS, Terrain } from './terrain.js';
@@ -234,11 +236,14 @@ export class App {
   private finalStatsReported = false;
   // The result of each scene, in order, for the results page.
   private readonly results: SceneResult[] = [];
+  // The scenes of the benchmark: this.scenes with no intro.
+  private readonly benchmarkScenes: readonly Scene[];
   private readonly resultsPage: ResultsPage;
   private exitPressed = false;
 
-  // format is the format of the texture views that frame() draws into.
-  constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel) {
+  // format is the format of the texture views that frame() draws into. With introImages, the intro
+  // scene comes before the benchmark scenes.
+  constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel, introImages?: IntroImages) {
     this.device = device;
     this.gpuTimer = GpuTimer.create(device);
     // All objects in all scenes use this one light. A scene can change its direction and colors.
@@ -268,7 +273,9 @@ export class App {
       cameraStart: cameraEye(0),
       moveShip: (offset, turn) => placeShip(this.ship, offset, turn),
     };
-    this.scenes = SCENES.map((createScene) => createScene(shared));
+    const intro = introImages ? [createIntroScene(shared, introImages)] : [];
+    this.scenes = [...intro, ...SCENES.map((createScene) => createScene(shared))];
+    this.benchmarkScenes = this.scenes.filter((scene) => scene.benchmark !== false);
   }
 
   // The name of the current benchmark scene.
@@ -276,9 +283,9 @@ export class App {
     return sceneAt(this.scenes, this.elapsed).scene.name;
   }
 
-  // The number of scenes.
+  // The number of benchmark scenes.
   get sceneCount(): number {
-    return this.scenes.length;
+    return this.benchmarkScenes.length;
   }
 
   // True after the end of the last scene, when all of the results are written. Then frame() draws
@@ -309,19 +316,25 @@ export class App {
     return this.elapsed >= this.scenes.reduce((sum, scene) => sum + scene.duration, 0);
   }
 
-  // Go to the start of a scene. The scene numbers start at 1. The scene starts as after a normal
-  // transition: the ship is at its start position, and the scene time is 0.
+  // Go to the start of a benchmark scene. The scene numbers start at 1, and the intro has no number.
+  // Scene 0 is the first scene, which is the intro if there is one.
   jumpToScene(sceneNumber: number): void {
-    const index = Math.max(0, Math.min(this.scenes.length - 1, Math.floor(sceneNumber) - 1));
-    this.elapsed = this.scenes.slice(0, index).reduce((sum, scene) => sum + scene.duration, 0);
-    // Start just after the fade from black.
-    this.elapsed += index > 0 ? TRANSITION_FADE_TIME : 0;
+    const number = Math.min(this.benchmarkScenes.length, Math.floor(sceneNumber));
+    this.jumpToIndex(number >= 1 ? this.scenes.indexOf(this.benchmarkScenes[number - 1]) : 0);
   }
 
   // Go to the start of the next scene, or to the first scene after the last scene.
   nextScene(): void {
     const index = this.currentScene ? this.scenes.indexOf(this.currentScene) : 0;
-    this.jumpToScene(((index + 1) % this.scenes.length) + 1);
+    this.jumpToIndex((index + 1) % this.scenes.length);
+  }
+
+  // Go to the start of the scene at an index of this.scenes. The scene starts as after a normal
+  // transition: the ship is at its start position, and the scene time is 0.
+  private jumpToIndex(index: number): void {
+    this.elapsed = this.scenes.slice(0, index).reduce((sum, scene) => sum + scene.duration, 0);
+    // Start just after the fade from black.
+    this.elapsed += index > 0 ? TRANSITION_FADE_TIME : 0;
   }
 
   toggleTerrainRenderMode(): void {
@@ -340,7 +353,7 @@ export class App {
     }
     if (this.finished) {
       const encoder = this.device.createCommandEncoder();
-      const sceneNames = this.scenes.map((scene) => scene.name);
+      const sceneNames = this.benchmarkScenes.map((scene) => scene.name);
       this.resultsPage.draw(encoder, colorView, width, height, sceneNames, this.results);
       this.device.queue.submit([encoder.finish()]);
       return;
@@ -460,12 +473,14 @@ export class App {
     // do not write depth. Objects that draw after them would cover them. Blended scene objects that
     // the ship can fly through, and screen effects, go after the ship.
     scene.draw(pass);
-    this.ship.draw(pass);
+    if (scene.shipVisible?.() ?? true) {
+      this.ship.draw(pass);
+    }
     scene.drawOcclusionQueries?.(pass);
     scene.drawAfterShip?.(pass);
     this.fade.draw(pass, fade);
     pass.end();
-    scene.afterMainPass?.(encoder);
+    scene.afterMainPass?.(encoder, sceneView);
 
     // Copy the scene to the output, and then draw the screen effects that read the scene image.
     const post = encoder.beginRenderPass({
@@ -486,7 +501,13 @@ export class App {
     const write = (gpu: string) =>
       console.log(`Scene "${scene.name}": ${frames} frames in ${seconds.toFixed(1)} s, ${fps.toFixed(1)} fps${gpu}`);
     this.stats = { frames: 0, seconds: 0 };
-    this.results.push({ number: this.scenes.indexOf(scene) + 1, name: scene.name, frames, seconds });
+    // A scene that is not part of the benchmark (the intro) has no result. Its GPU time does not go
+    // to the next scene.
+    if (scene.benchmark === false) {
+      this.gpuTimer?.discardTotal();
+      return;
+    }
+    this.results.push({ number: this.benchmarkScenes.indexOf(scene) + 1, name: scene.name, frames, seconds });
     if (!this.gpuTimer) {
       write('');
       return;

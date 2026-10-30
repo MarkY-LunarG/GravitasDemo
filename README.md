@@ -10,6 +10,9 @@ The camera is 500 m above the ground and tilts down.
 The hills and craters move toward the ship, but the ship does not move.
 The camera moves around the ship on a path that repeats every 20 seconds.
 The application is a benchmark with a sequence of scenes.
+First, a 14-second intro shows the LunarG logo, and the ship takes the place of the G.
+The intro is not part of the benchmark results.
+The times below are from the end of the intro.
 After 20 seconds, the terrain goes away, and the ship flies through a field of asteroids.
 After 40 seconds, the ship falls into the atmosphere of a yellow-brown planet, with re-entry
 heating, clouds, rain, and lightning.
@@ -60,7 +63,7 @@ If npm reports that it did not run their install scripts, the application still 
 
 The Vite development server loads the changes when you save a file.
 
-To start at a scene, give its number (from 1):
+To start at a benchmark scene with no intro, give its number (from 1):
 
 ```sh
 npm start -- --scene=3
@@ -145,6 +148,9 @@ The window close button also exits the desktop application.
 | `src/rain.ts`        | Rain on the camera lens: streaks, still drops, and mist, in the post pass. |
 | `src/blit.ts`        | Copies the scene image to the output in the post pass.                |
 | `src/results-page.ts` | The results page: a table of the scene results and an Exit button.  |
+| `src/intro-logo.ts`  | The LunarG logo of the intro: the three logo images and the tube flicker. |
+| `src/bloom.ts`       | The bloom filter of the intro.                                        |
+| `src/png.ts`         | A small PNG decoder for the desktop target.                           |
 | `src/lightning.ts`   | Lightning flashes at the edges of the screen, with a blend constant.  |
 | `src/reentry.ts`     | The re-entry fire around the ship, and its smoke.                     |
 | `src/gpu-timer.ts`   | GPU time of the render pass, from a timestamp query set.              |
@@ -244,8 +250,10 @@ Other objects do not cast shadows on the terrain, and the terrain does not cast 
 
 ## Benchmark scenes
 
-Each scene is in its own file in `src/scenes/`, and `SCENES` in `src/scenes/index.ts` gives their
-order:
+Each scene is in its own file in `src/scenes/`, and `SCENES` in `src/scenes/index.ts` gives the
+order of the benchmark scenes.
+The App puts the intro (`intro-scene.ts`) before them.
+The intro has `benchmark: false`, so it has no result, no scene number, and no GPU time.
 
 | Scene                | File                | Duration   | Contents                         |
 | -------------------- | ------------------- | ---------- | -------------------------------- |
@@ -255,6 +263,51 @@ order:
 | `City flyover`       | `city-scene.ts`     | 20 seconds | The ship flies over dark brown land with reflective glass towers, toward the sun. |
 
 After the last scene, the application shows the results page.
+
+## Intro
+
+The intro (`src/scenes/intro-scene.ts`) uses three images in `textures/`:
+
+- `2025-LunarG-Color-Logo-with-tagline.png`: the color logo, with a transparent background.
+- `LunarG-Logo-Neon-Transparent.png`: the neon logo.
+- `LunarG-Logo-NeonTube-Transparent.png`: the neon tube logo.
+
+The two neon images have the same size, and their letters are at the same positions.
+The color logo has the same letter size, at the offset (120, 118) in the neon images.
+`src/intro-logo.ts` draws the logo with one full-screen shader, which mixes the three images.
+
+| Time (s)    | Event                                                                       |
+| ----------- | --------------------------------------------------------------------------- |
+| 0 to 3      | The color logo on black.                                                    |
+| 3 to 4.5    | The color logo blends into the neon logo.                                   |
+| 4.5 to 6.5  | The neon logo becomes brighter, with a bloom filter, and changes to the neon tube logo. |
+| 6.5 to 10   | The tubes flicker on and off, as tubes that fail, and the bloom increases.  |
+| 10          | A white flash. The G tube and its glow go out, and the ship is in its place. |
+| 10.6 to 13.5 | The engines ignite, the ship turns around, and it flies off to the left.   |
+| 13.5 to 14  | The image fades to black, and the first benchmark scene starts.             |
+
+Each tube (each letter, the bracket, the dot, and the tagline) flickers by itself.
+The shader finds the tube of a pixel from its position in the logo.
+The tubes are near white, and the glow panel behind them is blue, so the shader separates them
+by color.
+An unlit tube is dim gray glass.
+
+The ship has the same height on the screen as the G.
+The scene finds the ray from the camera through the G, and puts the ship on it at the distance
+where the height of its solid parts (`Ship.height`) is the height of the G.
+
+The bloom filter (`src/bloom.ts`) runs between the main pass and the post pass
+(`Scene.afterMainPass()`).
+It keeps the parts of the image that are brighter than a threshold, at half size, and makes a chain
+of 6 smaller images.
+Then it adds each small image back to the next larger one, so the glow is sharp near bright parts
+and wide and weak farther away.
+The post pass adds the result to the output.
+
+The desktop target decodes the images with `src/png.ts`, a small PNG decoder that uses
+`node:zlib`.
+It supports 8-bit gray, RGB, palette, gray with alpha, and RGBA images with no interlace.
+The browser target uses the image decoder of the browser.
 Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
 fades in from black in the same time.
 At the start of each scene, the ship is at its start position, with no boost and no heat.

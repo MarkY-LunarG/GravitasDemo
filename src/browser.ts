@@ -1,13 +1,51 @@
 // The browser target: show the scene (src/app.ts) in a canvas with the browser WebGPU API.
 // Press W to toggle between the solid and the wireframe terrain, and N to go to the next scene.
-// To start at a scene, give its number (from 1) in the URL: ?scene=2
+// To start at a benchmark scene with no intro, give its number (from 1) in the URL: ?scene=2
 // After the last scene, the canvas shows the results page. Its Exit button stops the application.
 
 import { App } from './app.js';
 import { parseGlb } from './gltf.js';
+import type { IntroImages } from './intro-logo.js';
+import type { RgbaImage } from './png.js';
 
 // Vite copies the model into the build output and changes this URL to point to the copy.
 const SHIP_MODEL_URL = new URL('../lunarg-ship/lunarg_ship.glb', import.meta.url);
+// The images of the intro (the file names are also in INTRO_IMAGE_FILES). Vite needs each URL as
+// one literal string.
+const INTRO_IMAGE_URLS = {
+  colorLogo: new URL('../textures/2025-LunarG-Color-Logo-with-tagline.png', import.meta.url),
+  neon: new URL('../textures/LunarG-Logo-Neon-Transparent.png', import.meta.url),
+  neonTube: new URL('../textures/LunarG-Logo-NeonTube-Transparent.png', import.meta.url),
+};
+
+// Load an image, and get its pixels with no premultiplied alpha, as the PNG file has them.
+async function loadImage(url: URL): Promise<RgbaImage> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Cannot load ${url}: ${response.status} ${response.statusText}`);
+  }
+  const bitmap = await createImageBitmap(await response.blob(), {
+    premultiplyAlpha: 'none',
+    colorSpaceConversion: 'none',
+  });
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('The browser cannot make a 2D canvas context');
+  }
+  context.drawImage(bitmap, 0, 0);
+  const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height);
+  return { width: bitmap.width, height: bitmap.height, data: new Uint8Array(pixels.data.buffer) };
+}
+
+async function loadIntroImages(): Promise<IntroImages> {
+  const [colorLogo, neon, neonTube] = await Promise.all([
+    loadImage(INTRO_IMAGE_URLS.colorLogo),
+    loadImage(INTRO_IMAGE_URLS.neon),
+    loadImage(INTRO_IMAGE_URLS.neonTube),
+  ]);
+  return { colorLogo, neon, neonTube };
+}
 
 function showError(message: string): void {
   const element = document.getElementById('error');
@@ -50,9 +88,10 @@ async function main(): Promise<void> {
   if (!response.ok) {
     throw new Error(`Cannot load ${SHIP_MODEL_URL}: ${response.status} ${response.statusText}`);
   }
-  const app = new App(device, format, parseGlb(await response.arrayBuffer()));
-  const sceneNumber = Number(new URLSearchParams(location.search).get('scene') ?? '1');
-  app.jumpToScene(Number.isFinite(sceneNumber) && sceneNumber >= 1 ? sceneNumber : 1);
+  const app = new App(device, format, parseGlb(await response.arrayBuffer()), await loadIntroImages());
+  // With no scene in the URL, the application starts with the intro (scene 0).
+  const sceneNumber = Number(new URLSearchParams(location.search).get('scene') ?? '0');
+  app.jumpToScene(Number.isFinite(sceneNumber) && sceneNumber >= 1 ? sceneNumber : 0);
 
   // The canvas fills the window. Its size in pixels is its CSS size times the device pixel ratio,
   // so the image is sharp on high-density displays.

@@ -73,6 +73,9 @@ export interface Scene {
   // The duration in seconds. The last scene can have a duration of Infinity, so that it continues
   // until the application stops. Otherwise, the App is finished at the end of the last scene.
   readonly duration: number;
+  // False for a scene that is not part of the benchmark (the intro). It has no result and no scene
+  // number, and --scene=N does not count it.
+  readonly benchmark?: boolean;
   // False for a scene with the engines off. The engines are on or off at the start of the scene.
   readonly engines?: boolean;
   // A camera that does not move, at this angle in degrees around the ship: 0 is behind the ship,
@@ -98,9 +101,12 @@ export interface Scene {
   // Draw objects in occlusion queries. The App calls this in the main pass, after it draws the
   // ship and before drawAfterShip(), so the depth buffer has all of the opaque objects.
   drawOcclusionQueries?(pass: GPURenderPassEncoder): void;
-  // Record commands that use the results of the main pass, for example resolveQuerySet(). The App
-  // calls this after the main pass and before the post pass.
-  afterMainPass?(encoder: GPUCommandEncoder): void;
+  // Record commands that use the results of the main pass, for example resolveQuerySet() or passes
+  // that read the scene image. The App calls this after the main pass and before the post pass.
+  // sceneView is the image of the main pass.
+  afterMainPass?(encoder: GPUCommandEncoder, sceneView: GPUTextureView): void;
+  // False when the App must not draw the ship in this frame. Without it, the App draws the ship.
+  shipVisible?(): boolean;
   // Draw screen effects that read the image of the scene, for example water on the camera lens.
   // The App calls this in a second pass, after it copies the scene image to the output. The pass
   // has no depth buffer. sceneView has the same size and format as the output.

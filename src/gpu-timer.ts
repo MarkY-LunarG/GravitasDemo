@@ -95,6 +95,14 @@ export class GpuTimer {
     pass.end();
   }
 
+  // Start a new total, and do not read the total of the frames that are submitted after the previous
+  // call.
+  discardTotal(): void {
+    const encoder = this.device.createCommandEncoder();
+    encoder.clearBuffer(this.totalBuffer);
+    this.device.queue.submit([encoder.finish()]);
+  }
+
   // Read the total of the frames that are submitted after the previous call, and start a new
   // total. onTotal gets the GPU time in milliseconds and the number of measured frames, after the
   // GPU completes these frames.

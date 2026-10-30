@@ -546,6 +546,8 @@ export class Ship {
   private readonly uniformData = new Float32Array(DRAW_UNIFORM_FLOATS);
   // The center of the bounding box of the ship in model space, with the engines off.
   readonly center: Vec3;
+  // The height of the solid parts of the ship (with no flames or glow), in model units.
+  readonly height: number;
   private placement: Mat4 = compose([0, 0, 0], [0, 0, 0, 1], [1, 1, 1]);
   private viewProjection: Mat4 = compose([0, 0, 0], [0, 0, 0, 1], [1, 1, 1]);
   private engineState: EngineState = 'off';
@@ -840,13 +842,17 @@ export class Ship {
 
     // The placement is the identity here, so the world matrices are in model space.
     this.updatePose();
-    this.center = this.computeCenter();
+    const all = this.computeBounds([...this.opaqueItems, ...this.blendedItems]);
+    this.center = [(all.min[0] + all.max[0]) / 2, (all.min[1] + all.max[1]) / 2, (all.min[2] + all.max[2]) / 2];
+    const solid = this.computeBounds(this.opaqueItems);
+    this.height = solid.max[1] - solid.min[1];
   }
 
-  private computeCenter(): Vec3 {
+  // The box around the items in model space, in the current pose.
+  private computeBounds(items: readonly DrawItem[]): { min: number[]; max: number[] } {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
-    for (const item of [...this.opaqueItems, ...this.blendedItems]) {
+    for (const item of items) {
       const { min: low, max: high } = item.primitive;
       for (let corner = 0; corner < 8; ++corner) {
         const point = transformPoint(this.worldMatrices[item.node], [
@@ -860,7 +866,7 @@ export class Ship {
         }
       }
     }
-    return [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+    return { min, max };
   }
 
   // Set the transform from model space to world space.
