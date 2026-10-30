@@ -282,8 +282,9 @@ The color logo has the same letter size, at the offset (120, 118) in the neon im
 | 3 to 4.5    | The color logo blends into the neon logo.                                   |
 | 4.5 to 6.5  | The neon logo becomes brighter, with a bloom filter, and changes to the neon tube logo. |
 | 6.5 to 10   | The tubes flicker on and off, as tubes that fail, and the bloom increases.  |
-| 10          | A white flash. The G tube and its glow go out, and the ship is in its place. |
-| 10.6 to 13.5 | The engines ignite, the ship turns around, and it flies off to the left.   |
+| 10          | A white flash. The G tube goes out, and the ship is in its place, with its front to the left. |
+| 10.6 to 13.5 | The engines ignite, and the ship flies off to the left.                    |
+| 12 to 12.6  | The G tube flickers and comes on again.                                     |
 | 13.5 to 14  | The image fades to black, and the first benchmark scene starts.             |
 
 Each tube (each letter, the bracket, the dot, and the tagline) flickers by itself.
@@ -295,6 +296,8 @@ An unlit tube is dim gray glass.
 The ship has the same height on the screen as the G.
 The scene finds the ray from the camera through the G, and puts the ship on it at the distance
 where the height of its solid parts (`Ship.height`) is the height of the G.
+The ship faces to the left, so its ring is on the G.
+The ring is not at the center of the ship, so `RING_OFFSET` moves the ship to put the ring on the G.
 
 The bloom filter (`src/bloom.ts`) runs between the main pass and the post pass
 (`Scene.afterMainPass()`).

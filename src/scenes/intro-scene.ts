@@ -7,9 +7,9 @@
 //   logo.
 // - 6.5 to 10: the neon tubes flicker on and off, as tubes that fail, and the bloom increases.
 // - 10: a white flash. The G tube goes out (it is unlit glass), and the ship is in its place, at
-//   the same size, with its front to the right. A light from the camera side lights the ship at
-//   approximately half brightness.
-// - 10 to 13.5: the engines ignite, the ship turns around, and it flies off to the left.
+//   the same size, with its front to the left, so its ring is on the G. A light from the camera
+//   side lights the ship at approximately half brightness.
+// - 10 to 13.5: the engines ignite, and the ship flies off to the left.
 // - 12 to 12.6: as the ship goes away, the G tube flickers and comes on again.
 // - 13.5 to 14: the App fades the image to black, and the benchmark starts.
 
@@ -26,11 +26,14 @@ const FLASH_TIME = 10;
 // The flash comes up in FLASH_RISE seconds and goes away in FLASH_FALL seconds.
 const FLASH_RISE = 0.06;
 const FLASH_FALL = 0.3;
-// After the flash: the engines ignite, the ship turns around, and then it flies away.
+// After the flash: the engines ignite, and then the ship flies away.
 const IGNITE_TIME = 10.6;
-const TURN_START = 10.9;
-const TURN_END = 11.8;
-const FLY_START = 11.5;
+const FLY_START = 11.2;
+// The ship faces the left of the screen (the heading is to the right).
+const SHIP_YAW = Math.PI;
+// The ring is not at the center of the ship box: the hull and the engines go out behind it. This
+// moves the ship to the right (as a fraction of its height), so the ring is on the G.
+const RING_OFFSET = 0.11;
 // The G tube comes on again in this time, with a flicker.
 const RELIGHT_START = 12;
 const RELIGHT_END = 12.6;
@@ -115,9 +118,9 @@ export function createIntroScene(shared: SharedObjects, images: IntroImages): Sc
   let bloomIntensity = 0;
   let enginesOn = false;
 
-  // Put the ship where the G is, at the same height on the screen. flyOffset moves it to the left,
-  // as a fraction of its distance from the camera. yaw turns it.
-  const placeShipOnG = (viewProjection: Mat4, cameraPosition: Vec3, flyOffset: number, yaw: number): void => {
+  // Put the ship where the G is, at the same height on the screen, with its front to the left.
+  // flyOffset moves it to the left, as a fraction of its distance from the camera.
+  const placeShipOnG = (viewProjection: Mat4, cameraPosition: Vec3, flyOffset: number): void => {
     const [sx, sy] = logo.toScreen(G_CENTER[0], G_CENTER[1]);
     const x = (sx / size.width) * 2 - 1;
     const y = 1 - (sy / size.height) * 2;
@@ -140,11 +143,8 @@ export function createIntroScene(shared: SharedObjects, images: IntroImages): Sc
     const delta = [0, 1, 2].map((i) => position[i] - shipCenter[i]);
     const along = delta[0] * heading[0] + delta[2] * heading[2];
     const across = delta[0] * right[0] + delta[2] * right[2];
-    shared.moveShip([across, delta[1], along - flyOffset * distance], {
-      yaw,
-      pitch: 0,
-      roll: Math.sin(Math.min(1, Math.max(0, (time - TURN_START) / (TURN_END - TURN_START))) * Math.PI) * 0.5,
-    });
+    const ringShift = RING_OFFSET * ship.height;
+    shared.moveShip([across, delta[1], along + ringShift - flyOffset * distance], { yaw: SHIP_YAW, pitch: 0, roll: 0 });
   };
 
   return {
@@ -210,8 +210,7 @@ export function createIntroScene(shared: SharedObjects, images: IntroImages): Sc
         ship.setBoost(true);
       }
       const fly = Math.max(0, t - FLY_START);
-      const yaw = Math.PI * smoothstep(TURN_START, TURN_END, t);
-      placeShipOnG(viewProjection, cameraPosition, 0.5 * FLY_ACCELERATION * fly * fly, yaw);
+      placeShipOnG(viewProjection, cameraPosition, 0.5 * FLY_ACCELERATION * fly * fly);
     },
     draw(pass) {
       logo.draw(pass);
