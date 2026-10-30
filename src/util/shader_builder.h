@@ -31,6 +31,9 @@ class WgslConstants {
     WgslConstants& F32(std::string_view name, double value);
     WgslConstants& Bool(std::string_view name, bool value);
     WgslConstants& Vec3f(std::string_view name, const Vec3& value);
+    // A declaration with no type, as `const NAME = 0.55;`. A float value is then an abstract
+    // float, as in a shader that has the number in its text.
+    WgslConstants& Abstract(std::string_view name, double value);
     // A declaration with a type and a value that the caller writes, for example an array.
     WgslConstants& Raw(std::string_view name, std::string_view type, std::string_view value);
 

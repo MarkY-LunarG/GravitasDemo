@@ -151,5 +151,8 @@ std::vector<SceneFactory> BenchmarkScenes();
 
 // The create functions of the scenes.
 std::unique_ptr<Scene> CreateTerrainScene(const SharedObjects& shared);
+std::unique_ptr<Scene> CreateAsteroidScene(const SharedObjects& shared);
+std::unique_ptr<Scene> CreateEntryScene(const SharedObjects& shared);
+std::unique_ptr<Scene> CreateCityScene(const SharedObjects& shared);
 
 }  // namespace hackathon

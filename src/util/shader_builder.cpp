@@ -38,6 +38,15 @@ WgslConstants& WgslConstants::Vec3f(std::string_view name, const Vec3& value) {
     return Raw(name, "vec3f", WgslVec3(value));
 }
 
+WgslConstants& WgslConstants::Abstract(std::string_view name, double value) {
+    text_ += "const ";
+    text_ += name;
+    text_ += " = ";
+    text_ += WgslFloat(value);
+    text_ += ";\n";
+    return *this;
+}
+
 WgslConstants& WgslConstants::Raw(std::string_view name, std::string_view type,
                                   std::string_view value) {
     text_ += "const ";

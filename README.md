@@ -7,7 +7,9 @@ The benchmark is being ported from TypeScript to C++.
   See `ts/README.md` for how to run it and for a description of the scenes.
   It stays until the C++ version has the same output, and then it is removed.
 - The rest of the repository: the C++ version, for the desktop and for the browser.
-  It now plays the first benchmark scene: the terrain, the ship, and the stars (milestone 2).
+  It now plays the four benchmark scenes: the terrain, the asteroids, the atmospheric entry, and
+  the city (milestone 3).
+  The intro and the results page come in milestone 4.
   See "Status" below.
 
 The C++ version has two targets from one source:
@@ -181,6 +183,15 @@ The replay plays all of the frames with no other error.
 The port has six milestones: the skeleton, the core objects and the terrain scene, scenes 2 to 4,
 the intro and the results page, parity with the TypeScript version, and the removal of `ts/`.
 
+Milestone 3 (scenes 2 to 4) is verified on the same Linux system:
+
+- Desktop: all four scenes play in order, with no WebGPU errors, and each scene writes its result.
+- Parity: at a fixed step of exactly 1/60 s, the C++ version and the TypeScript version give the
+  same image, pixel for pixel, for frames of all four scenes (scene 1 frame 300, scene 2 frame 600,
+  scene 3 frames 600 and 1500, and scene 4 frames 600 and 1100).
+  The TypeScript frames come from an offscreen renderer with `@kmamal/gpu`, on the same GPU.
+- Browser: the wasm64 build passes. It is not run in a browser yet.
+
 Milestone 2 (core objects and the terrain scene) is verified on the same Linux system:
 
 - Desktop: the terrain scene plays for its 20 seconds, writes its result, and stops with
@@ -219,6 +230,17 @@ Not verified yet:
 | `src/app/scenes/scene.h`      | The `Scene` interface, and the shared objects that scenes can use. |
 | `src/app/scenes/scenes.cpp`   | The list of scenes, in the order that they play.             |
 | `src/app/scenes/terrain_scene.cpp` | Scene 1: the terrain and the ship.                      |
+| `src/app/scenes/asteroid_scene.cpp` | Scene 2: the asteroids and the ship.                   |
+| `src/app/scenes/entry_scene.cpp` | Scene 3: the atmospheric entry.                           |
+| `src/app/scenes/city_scene.cpp` | Scene 4: the city flyover.                                 |
+| `src/app/asteroids.cpp`       | The asteroids: shape, update, and cull compute shaders, and indirect draws. |
+| `src/app/ship_path.cpp`       | A smooth ship path from sine waves, in C++ and in WGSL.      |
+| `src/app/clouds.cpp`          | Blended cloud sprites, sorted far to near, drawn with `DrawIndexedIndirect`. |
+| `src/app/rain.cpp`            | Rain on the camera lens, in the post pass.                   |
+| `src/app/lightning.cpp`       | Lightning flashes at the edges of the screen, with a blend constant. |
+| `src/app/reentry.cpp`         | The re-entry fire around the ship, and its smoke.            |
+| `src/app/buildings.cpp`       | Reflective towers, two cube maps of reflections, and render bundles. |
+| `src/app/lens_flare.cpp`      | The lens flare of the sun, with occlusion queries.           |
 | `src/app/terrain.cpp`         | The terrain grid: pipelines, and the solid and wireframe modes. |
 | `src/app/ship.cpp`            | The ship: pipelines, the engine animations, and the engine state. |
 | `src/app/sky.cpp`             | The background: stars, and as options a nebula, a planet, and an atmosphere. |

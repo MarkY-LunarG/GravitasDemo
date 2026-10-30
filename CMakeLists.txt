@@ -40,11 +40,22 @@ set(HACKATHON_ASSETS
 
 # The WGSL shaders. cmake/embed_shaders.cmake puts them into generated/shaders.h.
 set(HACKATHON_SHADERS
+    shaders/asteroid_common.wgsl
+    shaders/asteroid_render.wgsl
+    shaders/asteroid_shape.wgsl
+    shaders/asteroid_update.wgsl
     shaders/blit.wgsl
+    shaders/buildings.wgsl
+    shaders/clouds.wgsl
     shaders/fade.wgsl
     shaders/gpu_timer.wgsl
+    shaders/lens_flare.wgsl
     shaders/light.wgsl
+    shaders/lightning.wgsl
     shaders/noise.wgsl
+    shaders/rain.wgsl
+    shaders/reentry_flame.wgsl
+    shaders/reentry_smoke.wgsl
     shaders/ship.wgsl
     shaders/ship_effects.wgsl
     shaders/ship_glow.wgsl
@@ -59,13 +70,24 @@ include(cmake/embed_shaders.cmake)
 add_executable(hackathon
     src/main.cpp
     src/app/app.cpp
+    src/app/asteroids.cpp
     src/app/blit.cpp
+    src/app/buildings.cpp
+    src/app/clouds.cpp
     src/app/fade.cpp
     src/app/gpu_timer.cpp
+    src/app/lens_flare.cpp
     src/app/light.cpp
+    src/app/lightning.cpp
+    src/app/rain.cpp
+    src/app/reentry.cpp
+    src/app/scenes/asteroid_scene.cpp
+    src/app/scenes/city_scene.cpp
+    src/app/scenes/entry_scene.cpp
     src/app/scenes/scenes.cpp
     src/app/scenes/terrain_scene.cpp
     src/app/ship.cpp
+    src/app/ship_path.cpp
     src/app/sky.cpp
     src/app/terrain.cpp
     src/platform/gpu_init.cpp
