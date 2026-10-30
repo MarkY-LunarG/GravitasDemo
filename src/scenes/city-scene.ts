@@ -3,8 +3,11 @@
 // ship at the upper right of the screen. The camera is at the right side of the ship, and looks a
 // little in front of it, so the ship is approximately one third from the left edge of the screen.
 // The ship flies from left to right, so the land and the towers move from right to left.
+// A lens flare shows when the sun is not behind the towers. Occlusion queries measure how much of
+// the sun is visible (see lens-flare.ts).
 
 import { Buildings } from '../buildings.js';
+import { LensFlare } from '../lens-flare.js';
 import type { Vec3 } from '../mat4.js';
 import { Sky } from '../sky.js';
 import type { Scene, SharedObjects } from './scene.js';
@@ -37,17 +40,19 @@ export function createCityScene(shared: SharedObjects): Scene {
     atmosphere: true,
     sunDisk: true,
   });
+  const lensFlare = new LensFlare(device, format, depthFormat);
   const buildings = new Buildings(device, format, depthFormat, sun, shared.shipCenter, heading, shared.ship);
   // The terrain samples its height field at worldPos, which moves along the heading.
   const worldPos = [0, 0, 0];
   let scroll = 0;
+  const sunDirection: Vec3 = [toSun[0] / length, toSun[1] / length, toSun[2] / length];
   return {
     name: 'City flyover',
     duration: Infinity,
     cameraAngle: -90,
     cameraLookAhead: LOOK_AHEAD,
     sun: {
-      direction: [toSun[0] / length, toSun[1] / length, toSun[2] / length],
+      direction: sunDirection,
       color: SUN_COLOR,
       ambient: [
         SUN_COLOR[0] * AMBIENT_STRENGTH,
@@ -65,12 +70,23 @@ export function createCityScene(shared: SharedObjects): Scene {
       // Deep in the atmosphere, with no lightning, a level horizon, and no tilt.
       sky.setAtmosphere(1, 0, [0, 0], 0.03, 0, width / height);
       buildings.update(encoder, scroll, viewProjection, cameraPosition, width, height);
+      lensFlare.update(viewProjection, sunDirection, SUN_COLOR, width / height);
     },
     draw(pass) {
       shared.terrain.draw(pass);
       buildings.draw(pass);
       // After the opaque objects, so that the depth test skips the sky behind them.
       sky.draw(pass);
+    },
+    occlusionQuerySet: lensFlare.querySet,
+    drawOcclusionQueries(pass) {
+      lensFlare.drawProbes(pass);
+    },
+    afterMainPass(encoder) {
+      lensFlare.resolve(encoder);
+    },
+    drawPost(pass) {
+      lensFlare.draw(pass);
     },
   };
 }

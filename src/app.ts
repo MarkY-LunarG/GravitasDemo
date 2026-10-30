@@ -401,15 +401,18 @@ export class App {
         depthLoadOp: 'clear',
         depthStoreOp: 'discard',
       },
+      ...(scene.occlusionQuerySet ? { occlusionQuerySet: scene.occlusionQuerySet } : {}),
     });
     // The ship goes after the opaque scene objects, because its flames and glow are blended and
     // do not write depth. Objects that draw after them would cover them. Blended scene objects that
     // the ship can fly through, and screen effects, go after the ship.
     scene.draw(pass);
     this.ship.draw(pass);
+    scene.drawOcclusionQueries?.(pass);
     scene.drawAfterShip?.(pass);
     this.fade.draw(pass, fade);
     pass.end();
+    scene.afterMainPass?.(encoder);
 
     // Copy the scene to the output, and then draw the screen effects that read the scene image.
     const post = encoder.beginRenderPass({

@@ -256,9 +256,12 @@ the camera and its path, and the fade.
 In each frame, the App moves the camera and updates the ship.
 Then it calls `update()` of the current scene, which can record compute passes.
 In the render pass, it calls `draw()` of the current scene, and then draws the ship.
+Then it calls `drawOcclusionQueries()` of the current scene, for draws in occlusion queries.
 Then it calls `drawAfterShip()` of the current scene, for blended objects that the ship can fly
 through and for screen effects, and then draws the fade.
 The render pass draws into a scene texture.
+After the render pass, the App calls `afterMainPass()` of the current scene, for example to
+resolve the occlusion queries.
 A second pass, the post pass, copies the scene texture to the output.
 Then it calls `drawPost()` of the current scene, for screen effects that read the scene image.
 A scene contains only its name, its duration, its own objects, and the shared objects that it draws.
@@ -417,6 +420,25 @@ appears farther along the street.
 A row of 12 tall glass towers (`FRONT_COUNT`) is on the far edge of the street, near the ship, so
 that most frames show a reflection.
 The reflection does not show the engine flames.
+
+A lens flare (`src/lens-flare.ts`) shows when the sun is not behind the towers or the ship.
+It has a glow with rays and a horizontal streak at the sun, and a line of six faint colored ghosts
+from the sun through the center of the screen.
+Each ghost is a hexagon, a circle, or an oval, which a seeded random value selects (`SHAPE_SEED`).
+An oval is squashed along the line from the sun through the center of the screen.
+Occlusion queries measure how much of the sun is visible:
+
+1. In the main pass, after the opaque objects and the ship, a disk over the sun is drawn two times
+   with no color writes (`Scene.drawOcclusionQueries()`).
+   Query 0 counts the samples that pass the depth test.
+   Query 1 counts all of the samples, with no depth test.
+2. After the main pass, `resolveQuerySet` writes the two counts into a storage buffer
+   (`Scene.afterMainPass()`).
+3. In the post pass, the flare shader reads the counts.
+   Its brightness is the visible part of the sun: the first count divided by the second.
+
+The counts stay on the GPU, so the flare changes in the same frame, with no read back to the CPU.
+The main pass uses the occlusion query set of the scene (`Scene.occlusionQuerySet`).
 
 ## Sky
 

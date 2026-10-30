@@ -93,6 +93,14 @@ export interface Scene {
   // Draw blended objects that the ship can be behind or in, and screen effects. The App calls this
   // after it draws the ship.
   drawAfterShip?(pass: GPURenderPassEncoder): void;
+  // The occlusion query set of the main pass. The scene uses it in drawOcclusionQueries().
+  readonly occlusionQuerySet?: GPUQuerySet;
+  // Draw objects in occlusion queries. The App calls this in the main pass, after it draws the
+  // ship and before drawAfterShip(), so the depth buffer has all of the opaque objects.
+  drawOcclusionQueries?(pass: GPURenderPassEncoder): void;
+  // Record commands that use the results of the main pass, for example resolveQuerySet(). The App
+  // calls this after the main pass and before the post pass.
+  afterMainPass?(encoder: GPUCommandEncoder): void;
   // Draw screen effects that read the image of the scene, for example water on the camera lens.
   // The App calls this in a second pass, after it copies the scene image to the output. The pass
   // has no depth buffer. sceneView has the same size and format as the output.
