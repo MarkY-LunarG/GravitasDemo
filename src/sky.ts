@@ -36,6 +36,8 @@ export interface SkyOptions {
   // A yellow-brown planet below the horizon, with an atmosphere. setAtmosphere() sets how deep the
   // camera is in the atmosphere. Without it, the sky ignores setAtmosphere().
   readonly atmosphere?: boolean;
+  // A sun disk with a glow, in the direction of the shared light.
+  readonly sunDisk?: boolean;
 }
 
 // The ring and the moons, relative to the planet radius R.
@@ -225,6 +227,7 @@ struct Body {
 
 const NEBULA: bool = ${options.nebula};
 const ATMOSPHERE: bool = ${options.atmosphere ?? false};
+const SUN_DISK: bool = ${options.sunDisk ?? false};
 // The horizontal heading. The tilt of the horizon goes up along it.
 const HEADING: vec3f = ${wgslVec3(heading)};
 ${options.planet ? planetConstants(options.planet, heading) : ''}
@@ -384,6 +387,13 @@ fn fs_sky(input: VertexOutput) -> @location(0) vec4f {
   ${options.planet ? PLANET_FRAGMENT : ''}
   if (ATMOSPHERE) {
     color = atmosphere(dir, color, input.clip);
+  }
+  if (SUN_DISK) {
+    // A disk of approximately 2 degrees, a bright glow near it, and a wide weak glow.
+    let toSun = dot(dir, light.direction);
+    let disk = smoothstep(0.99925, 0.99955, toSun);
+    let glow = pow(max(toSun, 0.0), 300.0) * 0.9 + pow(max(toSun, 0.0), 12.0) * 0.25;
+    color += light.color * (disk * 2.5 + glow);
   }
   return vec4f(color, 1.0);
 }

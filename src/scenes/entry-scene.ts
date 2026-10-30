@@ -47,7 +47,7 @@ export function createEntryScene(shared: SharedObjects): Scene {
   const reentry = new Reentry(device, format, depthFormat);
   return {
     name: 'Atmospheric entry',
-    duration: Infinity,
+    duration: 40,
     cameraAngle: -90,
     // The ship falls into the atmosphere with its engines off.
     engines: false,

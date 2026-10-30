@@ -4,12 +4,21 @@
 // draws the ship, and calls the update() and draw() of the current scene. A scene contains only
 // what is special to it: its name, its duration, its own objects, and which shared objects it draws.
 // When a scene starts, the App puts the ship back at its start position, turns the boost and the
-// heat off, and sets the engines on or off for the scene.
+// heat off, sets the engines on or off for the scene, and sets the sun and the terrain style of the
+// scene.
 
 import type { Mat4, Vec3 } from '../mat4.js';
 import type { DirectionalLight } from '../light.js';
 import type { Ship } from '../ship.js';
-import type { Terrain } from '../terrain.js';
+import type { Terrain, TerrainStyle } from '../terrain.js';
+
+// The sun of a scene: the direction from a surface toward the sun, the color of the sunlight, and
+// the color of the ambient light.
+export interface SceneSun {
+  readonly direction: Vec3;
+  readonly color: Vec3;
+  readonly ambient: Vec3;
+}
 
 // A turn of the ship around its center, in radians. Positive values turn the nose to the right,
 // raise the nose, and move the top of the ship to its right (a bank into a right turn).
@@ -70,6 +79,13 @@ export interface Scene {
   // 90 is at its left side, and -90 is at its right side. The camera stays at the start distance
   // and height, and looks at the start position of the ship. Without it, the camera follows its path.
   readonly cameraAngle?: number;
+  // The camera looks at a point this many meters in front of the start position of the ship, along
+  // its heading. A positive value moves the ship to the left of the screen in a side view.
+  readonly cameraLookAhead?: number;
+  // The sun of the scene. Without it, the scene has the default sun of the App.
+  readonly sun?: SceneSun;
+  // The look of the shared terrain. Without it, the terrain has DEFAULT_TERRAIN_STYLE.
+  readonly terrainStyle?: TerrainStyle;
   // Advance the scene objects. The App calls this before the render pass of the frame.
   update?(frame: FrameInfo): void;
   // Draw the scene objects. The App draws the ship after the scene objects.

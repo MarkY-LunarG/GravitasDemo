@@ -27,9 +27,9 @@ import {
   viewToWorldDirection,
 } from './mat4.js';
 import { SCENES } from './scenes/index.js';
-import type { Scene, SharedObjects, ShipTurn } from './scenes/scene.js';
+import type { Scene, SceneSun, SharedObjects, ShipTurn } from './scenes/scene.js';
 import { Ship } from './ship.js';
-import { TERRAIN_RADIUS, Terrain } from './terrain.js';
+import { DEFAULT_TERRAIN_STYLE, TERRAIN_RADIUS, Terrain } from './terrain.js';
 
 // All world units are meters. The camera is above the point (CAMERA_CORNER, CAMERA_CORNER), and
 // its heading is toward the origin. The terrain grid is a sector around the point below the camera.
@@ -210,6 +210,9 @@ export class App {
   private readonly gpuTimer: GpuTimer | null;
   private stats: SceneStats = { frames: 0, seconds: 0, gpuMilliseconds: 0, gpuFrames: 0 };
   private readonly terrain: Terrain;
+  private readonly sun: DirectionalLight;
+  // The sun of the scenes that do not have their own sun.
+  private readonly defaultSun: SceneSun;
   private readonly ship: Ship;
   private readonly fade: Fade;
   private readonly blit: Blit;
@@ -228,13 +231,14 @@ export class App {
   constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel) {
     this.device = device;
     this.gpuTimer = GpuTimer.create(device);
-    // All objects in all scenes use this one light.
-    const sun = new DirectionalLight(
-      device,
-      viewToWorldDirection(computeView(0), SUN_VIEW_POSITION),
-      SUN_COLOR,
-      AMBIENT_COLOR,
-    );
+    // All objects in all scenes use this one light. A scene can change its direction and colors.
+    this.defaultSun = {
+      direction: viewToWorldDirection(computeView(0), SUN_VIEW_POSITION),
+      color: SUN_COLOR,
+      ambient: AMBIENT_COLOR,
+    };
+    const sun = new DirectionalLight(device, this.defaultSun.direction, SUN_COLOR, AMBIENT_COLOR);
+    this.sun = sun;
     this.terrain = new Terrain(device, format, DEPTH_FORMAT, sun);
     this.ship = new Ship(device, format, DEPTH_FORMAT, sun, shipModel);
     placeShip(this.ship);
@@ -300,12 +304,20 @@ export class App {
       this.ship.setBoost(false);
       this.ship.setHeat(0);
       this.ship.resetEngines(scene.engines ?? true);
+      const sceneSun = scene.sun ?? this.defaultSun;
+      this.sun.setDirection(sceneSun.direction);
+      this.sun.setColors(sceneSun.color, sceneSun.ambient);
+      this.terrain.setStyle(scene.terrainStyle ?? DEFAULT_TERRAIN_STYLE);
     } else if (scene.duration === Infinity && this.stats.seconds >= STATS_INTERVAL) {
       this.reportStats(scene);
     }
     this.stats.frames += 1;
     this.stats.seconds += seconds;
-    const { viewProjection, cameraPosition } = this.updateCamera(width / height, scene.cameraAngle);
+    const { viewProjection, cameraPosition } = this.updateCamera(
+      width / height,
+      scene.cameraAngle,
+      scene.cameraLookAhead ?? 0,
+    );
     this.ship.update(seconds);
     const encoder = this.device.createCommandEncoder();
     scene.update?.({
@@ -322,15 +334,25 @@ export class App {
     this.render(encoder, colorView, width, height, scene, fade);
   }
 
-  // Move the camera along its path, or put it at a fixed angle around the ship (in degrees). Then
-  // give the camera to the shared objects. The terrain grid follows the camera, so that the grid
-  // always covers the view.
-  private updateCamera(aspect: number, fixedAngle?: number): { viewProjection: Mat4; cameraPosition: Vec3 } {
+  // Move the camera along its path, or put it at a fixed angle around the ship (in degrees). The
+  // camera looks at a point lookAhead meters in front of the start position of the ship. Then give
+  // the camera to the shared objects. The terrain grid follows the camera, so that the grid always
+  // covers the view.
+  private updateCamera(
+    aspect: number,
+    fixedAngle: number | undefined,
+    lookAhead: number,
+  ): { viewProjection: Mat4; cameraPosition: Vec3 } {
     const eye = cameraEye(fixedAngle !== undefined ? (fixedAngle * Math.PI) / 180 : cameraOrbitAngle(this.elapsed));
-    const toShip = [SHIP_CENTER[0] - eye[0], 0, SHIP_CENTER[2] - eye[2]] as const;
-    const length = Math.hypot(toShip[0], toShip[2]);
-    this.terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);
-    const view = lookAt(eye, SHIP_CENTER, [0, 1, 0]);
+    const target: Vec3 = [
+      SHIP_CENTER[0] + HEADING[0] * lookAhead,
+      SHIP_CENTER[1] + HEADING[1] * lookAhead,
+      SHIP_CENTER[2] + HEADING[2] * lookAhead,
+    ];
+    const toTarget = [target[0] - eye[0], 0, target[2] - eye[2]] as const;
+    const length = Math.hypot(toTarget[0], toTarget[2]);
+    this.terrain.setGridCenter(eye, [toTarget[0] / length, 0, toTarget[2] / length]);
+    const view = lookAt(eye, target, [0, 1, 0]);
     const projection = computeProjection(aspect);
     const viewProjection = multiply(projection, view);
     this.terrain.setViewProjection(viewProjection);

@@ -13,6 +13,7 @@ The application is a benchmark with a sequence of scenes.
 After 40 seconds, the terrain goes away, and the ship flies through a field of asteroids.
 After 80 seconds, the ship falls into the atmosphere of a yellow-brown planet, with re-entry
 heating, clouds, rain, and lightning.
+After 120 seconds, the ship flies over a dark brown land with reflective glass towers.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
 
@@ -129,6 +130,8 @@ The window close button also exits the desktop application.
 | `src/reentry.ts`     | The re-entry fire around the ship, and its smoke.                     |
 | `src/gpu-timer.ts`   | GPU time of the render pass, from a timestamp query set.              |
 | `src/scenes/entry-scene.ts` | Scene 3: the atmospheric entry.                               |
+| `src/scenes/city-scene.ts` | Scene 4: the city flyover.                                     |
+| `src/buildings.ts`   | Reflective towers, two cube maps of reflections, and render bundles.  |
 | `src/scenes/scene.ts` | The `Scene` interface, and the shared objects that scenes can use.   |
 | `src/scenes/index.ts` | The list of scenes, in the order that they play.                     |
 | `src/scenes/terrain-scene.ts` | Scene 1: the terrain and the ship.                           |
@@ -229,7 +232,8 @@ order:
 | -------------------- | ------------------- | ---------- | -------------------------------- |
 | `Terrain and ship`   | `terrain-scene.ts`  | 40 seconds | The terrain, the ship, and stars. |
 | `Asteroids and ship` | `asteroid-scene.ts` | 40 seconds | The ship moves around the asteroids, with a planet, a nebula, and stars. The camera does not move. |
-| `Atmospheric entry`  | `entry-scene.ts`    | No end     | The ship falls into a planet atmosphere, seen from its right side. The engines are off. |
+| `Atmospheric entry`  | `entry-scene.ts`    | 40 seconds | The ship falls into a planet atmosphere, seen from its right side. The engines are off. |
+| `City flyover`       | `city-scene.ts`     | No end     | The ship flies over dark brown land with reflective glass towers, toward the sun. |
 
 The last scene continues until you stop the application.
 Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
@@ -239,6 +243,12 @@ The engines are on, or off at once for a scene with `engines: false`.
 A scene with `cameraAngle` has a camera that does not move, at that angle in degrees around the
 ship: 0 is behind the ship, 90 is at its left side, and -90 is at its right side.
 Other scenes use the camera path.
+A scene with `cameraLookAhead` has a camera that looks that many meters in front of the ship.
+A scene can also set its own sun (`sun`: the direction, the color, and the ambient color) and the
+look of the shared terrain (`terrainStyle`: the colors of low and high ground, the height scale,
+and the crater scale, which is 0 for no craters).
+At the start of each scene, the App sets the sun and the terrain style of the scene, or the
+defaults.
 `App.sceneName` gives the name of the current scene.
 
 The App (`src/app.ts`) owns the objects that all scenes share: the sun, the terrain, the ship,
@@ -346,6 +356,67 @@ The scene does not use these entry points:
   The GPU timer uses the `timestampWrites` of the render pass instead.
 - `wgpuBufferWriteMappedRange`: the JavaScript API has no call for it.
   `getMappedRange()` and `unmap()` do not use it.
+
+## City flyover
+
+The camera is at the right side of the ship and looks 60 meters in front of it, so the ship is
+approximately one third from the left edge of the screen.
+The ship flies from left to right, so the dark brown land and the towers move from right to left.
+The land has low hills and no craters.
+The sky is the yellow-brown haze of the planet, with the sun at the upper right of the screen,
+in front of the ship.
+The sun of the scene comes from that direction, and the ambient light has the same color.
+
+The glass towers (`src/buildings.ts`) reflect their surroundings, and the reflections show the
+reflections in other towers.
+Two cube maps, A and B, hold the surroundings of a point among the towers:
+
+1. Six passes, one for each cube face, render the surroundings into A.
+   The towers in these passes reflect B, as it was at the end of the previous frame.
+2. Six passes render the surroundings into B. The towers in these passes reflect A.
+3. The main pass draws the towers, which reflect B.
+
+Thus each frame has two levels of reflection, and the reflections continue to build up from frame to
+frame.
+The cube passes draw a simple sky and dark ground as their background, but not the terrain and the
+ship.
+The center of the cube maps is on a street with no towers.
+A tower that moves through the center would hide all of the surroundings, and all reflections
+would go dark for a moment.
+
+All of these draws are in render bundles that are recorded one time: one bundle for each face of
+each cube map, and one for the main pass.
+The bundles use these Dawn entry points:
+
+- `wgpuRenderBundleEncoderDrawIndirect`: the background of each cube face.
+- `wgpuRenderBundleEncoderDrawIndexedIndirect`: the instanced towers.
+- `wgpuRenderBundleEncoderPushDebugGroup` and `wgpuRenderBundleEncoderPopDebugGroup`: a debug group
+  for each face, and for the background and the towers.
+- `wgpuRenderBundleEncoderInsertDebugMarker`: the cube map that the towers reflect.
+
+The cube maps do not contain the ship.
+Thus, the towers show the ship as an exact mirror image:
+
+1. In each frame, the CPU selects the tower walls that face the camera and the ship and are less
+   than `MIRROR_DISTANCE` (900) meters from the ship.
+   It keeps the `MAX_MIRRORS` (48) walls nearest to the ship.
+2. One pass draws the solid parts of the ship one time for each wall, with instancing
+   (`Ship.drawMirrored()`).
+   Each instance reflects the ship through the plane of its wall.
+   The fragment shader keeps only the pixels where the line from the camera goes through the wall
+   rectangle.
+   The pass writes the color into a reflection image the size of the view, and the wall id into a
+   second `r32uint` image.
+3. In the main pass, each wall adds the reflection image at its own pixels, but only where the
+   stored id is its own id.
+
+A wall that is parallel to the flight path would show the reflection directly behind the ship,
+where the ship hides it.
+Thus, each tower turns 10 to 28 degrees from the heading (`TOWER_TURN`), and the reflection
+appears farther along the street.
+A row of 12 tall glass towers (`FRONT_COUNT`) is on the far edge of the street, near the ship, so
+that most frames show a reflection.
+The reflection does not show the engine flames.
 
 ## Sky
 

@@ -185,6 +185,15 @@ const BOOST_FLAME_LENGTH = 1.6;
 // when the engines are off.
 const MIN_DRAW_SCALE = 0.001;
 
+// The formats of the targets of drawMirrored(): the color, the id of the mirror (plus 1, or 0 for
+// no image), and the depth. MIRROR_FLOATS is the size of one mirror in the storage buffer, and
+// MIRROR_VIEW_FLOATS is the size of the uniform: viewProjection (16 floats) and camera (4).
+export const MIRROR_COLOR_FORMAT: GPUTextureFormat = 'rgba8unorm';
+export const MIRROR_ID_FORMAT: GPUTextureFormat = 'r32uint';
+export const MIRROR_DEPTH_FORMAT: GPUTextureFormat = 'depth24plus';
+export const MIRROR_FLOATS = 32;
+export const MIRROR_VIEW_FLOATS = 20;
+
 // Morph target positions are offsets from the base positions. A primitive can have at most
 // MAX_MORPH_TARGETS targets. Primitives with fewer targets use zero offsets.
 const MAX_MORPH_TARGETS = 2;
@@ -351,6 +360,73 @@ fn fs_streak(input: StreakOutput) -> @location(0) vec4f {
   return vec4f(color * level, 0.0);
 }
 
+// Mirror images of the ship in flat mirrors, for example the glass walls of towers. Each instance
+// draws the ship mirrored through one mirror. A fragment shows only where the view through the
+// mirror rectangle sees it, so each image stays in its mirror. The pass writes the color, and the
+// id of the mirror (plus 1) in a second target, so that the mirror can find its own image.
+struct Mirror {
+  // The reflection through the plane of the mirror, in world space.
+  matrix: mat4x4f,
+  // xyz: the unit normal of the mirror. w: the plane offset (normal . point = w).
+  plane: vec4f,
+  // xyz: the center of the mirror rectangle. w: the id of the mirror.
+  center: vec4f,
+  // The unit directions of the sides of the rectangle (xyz), and the half lengths (w).
+  sideU: vec4f,
+  sideV: vec4f,
+}
+
+struct MirrorView {
+  viewProjection: mat4x4f,
+  camera: vec4f,
+}
+
+@group(2) @binding(0) var<uniform> mirrorView: MirrorView;
+@group(2) @binding(1) var<storage, read> mirrors: array<Mirror>;
+
+struct MirroredOutput {
+  @builtin(position) position: vec4f,
+  @location(0) worldPosition: vec3f,
+  @location(1) worldNormal: vec3f,
+  @location(2) @interpolate(flat) mirror: u32,
+}
+
+@vertex
+fn vs_mirrored(@location(0) position: vec3f, @location(1) normal: vec3f,
+               @builtin(instance_index) mirror: u32) -> MirroredOutput {
+  let matrix = mirrors[mirror].matrix;
+  let world = matrix * (draw.model * vec4f(position, 1.0));
+  var output: MirroredOutput;
+  output.position = mirrorView.viewProjection * world;
+  output.worldPosition = world.xyz;
+  output.worldNormal = (matrix * (draw.model * vec4f(normal, 0.0))).xyz;
+  output.mirror = mirror;
+  return output;
+}
+
+struct MirroredTargets {
+  @location(0) color: vec4f,
+  @location(1) id: u32,
+}
+
+@fragment
+fn fs_mirrored(input: MirroredOutput) -> MirroredTargets {
+  // The line from the camera to the mirror image must go through the mirror rectangle.
+  let mirror = mirrors[input.mirror];
+  let camera = mirrorView.camera.xyz;
+  let toImage = input.worldPosition - camera;
+  let t = (mirror.plane.w - dot(mirror.plane.xyz, camera)) / dot(mirror.plane.xyz, toImage);
+  let hit = camera + toImage * t - mirror.center.xyz;
+  if (t <= 0.0 || t >= 1.0 || abs(dot(hit, mirror.sideU.xyz)) > mirror.sideU.w
+      || abs(dot(hit, mirror.sideV.xyz)) > mirror.sideV.w) {
+    discard;
+  }
+  var targets: MirroredTargets;
+  targets.color = vec4f(applyLight(draw.baseColor.rgb, input.worldNormal), 1.0);
+  targets.id = u32(mirror.center.w) + 1u;
+  return targets;
+}
+
 struct UnlitOutput {
   @builtin(position) position: vec4f,
   @location(0) color: vec4f,
@@ -446,6 +522,9 @@ export class Ship {
   private readonly glowPipeline: RenderPipeline;
   private readonly heatPipeline: RenderPipeline;
   private readonly streakPipeline: RenderPipeline;
+  // The layout of the mirror bind group (group 2) of drawMirrored().
+  readonly mirrorBindGroupLayout: GPUBindGroupLayout;
+  private readonly mirrorPipeline: RenderPipeline;
   private readonly streakBuffer: Buffer;
   // The draw of the hull. The streaks use its bind group, for the model matrix of the hull.
   private hullItem: DrawItem | null = null;
@@ -530,6 +609,32 @@ export class Ship {
       attributes: [{ shaderLocation: location, offset: 0, format: 'float32x3' as const }],
     });
     const litBuffers = [float3(0), float3(1)];
+
+    // The mirror images: the color target, the id target, and the depth of the mirror pass. The
+    // mirror matrix turns the triangles the other way, so the pipeline draws both sides.
+    this.mirrorBindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'read-only-storage' },
+        },
+      ],
+    });
+    this.mirrorPipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({
+        bindGroupLayouts: [drawLayout, light.bindGroupLayout, this.mirrorBindGroupLayout],
+      }),
+      vertex: { module: shaderModule, entryPoint: 'vs_mirrored', buffers: litBuffers },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_mirrored',
+        targets: [{ format: MIRROR_COLOR_FORMAT }, { format: MIRROR_ID_FORMAT }],
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: MIRROR_DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
+    });
     const unlitBuffers = [
       float3(0),
       { arrayStride: 16, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x4' as const }] },
@@ -780,6 +885,29 @@ export class Ship {
     glowData.set([view[1], view[5], view[9], 0], 24);
     this.device.queue.writeBuffer(this.glowUniformBuffer, 0, glowData);
     this.cameraPosition = [cameraPosition[0], cameraPosition[1], cameraPosition[2]];
+  }
+
+  // Draw mirror images of the solid parts of the ship, one image for each of count mirrors. The
+  // pass must have the targets MIRROR_COLOR_FORMAT and MIRROR_ID_FORMAT, and the depth
+  // MIRROR_DEPTH_FORMAT. mirrors is a bind group of mirrorBindGroupLayout. Call draw() in the same
+  // frame, because it sets the model matrices.
+  drawMirrored(pass: RenderPassEncoder, mirrors: GPUBindGroup, count: number): void {
+    if (count === 0) {
+      return;
+    }
+    pass.setPipeline(this.mirrorPipeline);
+    this.light.bind(pass);
+    pass.setBindGroup(2, mirrors);
+    for (const item of this.opaqueItems) {
+      if (item.primitive.material.unlit) {
+        continue;
+      }
+      const { vertexBuffers, indexBuffer, indexFormat, indexCount } = item.gpuPrimitive;
+      pass.setBindGroup(0, item.bindGroup);
+      vertexBuffers.forEach((buffer, slot) => pass.setVertexBuffer(slot, buffer));
+      pass.setIndexBuffer(indexBuffer, indexFormat);
+      pass.drawIndexed(indexCount, count);
+    }
   }
 
   // Set the re-entry heating level, from 0 (none) to 1 (full).

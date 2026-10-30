@@ -79,7 +79,15 @@ export class DirectionalLight {
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.values);
   }
 
-  bind(pass: RenderPassEncoder): void {
+  // Set the color of the light and of the ambient light.
+  setColors(color: Vec3, ambient: Vec3): void {
+    this.values.set(color, COLOR_OFFSET);
+    this.values.set(ambient, AMBIENT_OFFSET);
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, this.values);
+  }
+
+  // Set the light bind group in a render pass or in a render bundle.
+  bind(pass: RenderPassEncoder | GPURenderBundleEncoder): void {
     pass.setBindGroup(LIGHT_BIND_GROUP, this.bindGroup);
   }
 }

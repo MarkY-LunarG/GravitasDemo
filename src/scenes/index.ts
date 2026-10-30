@@ -2,6 +2,7 @@
 // function that returns a Scene, and add the function to this list.
 
 import { createAsteroidScene } from './asteroid-scene.js';
+import { createCityScene } from './city-scene.js';
 import { createEntryScene } from './entry-scene.js';
 import type { Scene, SharedObjects } from './scene.js';
 import { createTerrainScene } from './terrain-scene.js';
@@ -10,4 +11,5 @@ export const SCENES: readonly ((shared: SharedObjects) => Scene)[] = [
   createTerrainScene,
   createAsteroidScene,
   createEntryScene,
+  createCityScene,
 ];

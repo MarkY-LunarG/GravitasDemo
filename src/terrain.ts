@@ -17,6 +17,24 @@ import type { Mat4, Vec3 } from './mat4.js';
 
 export type TerrainRenderMode = 'solid' | 'wireframe';
 
+// The look of the terrain. Low ground has lowColor and high ground has highColor, and slopes are a
+// little darker. heightScale multiplies the height of the hills and craters, and craterScale
+// multiplies the depth of the craters (0 for no craters).
+export interface TerrainStyle {
+  readonly lowColor: Vec3;
+  readonly highColor: Vec3;
+  readonly heightScale: number;
+  readonly craterScale: number;
+}
+
+// Gray ground with the full height.
+export const DEFAULT_TERRAIN_STYLE: TerrainStyle = {
+  lowColor: [0.3, 0.3, 0.3],
+  highColor: [0.55, 0.55, 0.55],
+  heightScale: 1,
+  craterScale: 1,
+};
+
 // The distance from the grid center to the last ring, in meters.
 export const TERRAIN_RADIUS = 20000;
 // The distance from the grid center to the first ring. Hills near the camera can hide the ground
@@ -99,6 +117,11 @@ struct Uniforms {
   gridYaw: f32,
   // The world X and Z of the grid center.
   gridCenter: vec2f,
+  // The colors of low and high ground (TerrainStyle).
+  lowColor: vec4f,
+  highColor: vec4f,
+  // x: the scale of the height. y: the scale of the craters.
+  style: vec4f,
 }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -230,11 +253,15 @@ fn craterLayer(p: vec2f, cellSize: f32, probability: f32, minRadius: f32, maxRad
 
 // cellSize is the size of a grid cell at p. Features that are small relative to it fade out.
 fn terrainHeight(p: vec2f, octaves: u32, cellSize: f32) -> vec3f {
-  return hills(p, octaves, cellSize)
-    + craterLayer(p, ${LARGE_CRATER_CELL}.0, ${LARGE_CRATER_PROBABILITY}, ${LARGE_CRATER_RADIUS[0]}.0,
-                  ${LARGE_CRATER_RADIUS[1]}.0, 100u, cellSize)
-    + craterLayer(p, ${SMALL_CRATER_CELL}.0, ${SMALL_CRATER_PROBABILITY}, ${SMALL_CRATER_RADIUS[0]}.0,
-                  ${SMALL_CRATER_RADIUS[1]}.0, 200u, cellSize);
+  let craterScale = uniforms.style.y;
+  var height = hills(p, octaves, cellSize);
+  if (craterScale > 0.0) {
+    height += (craterLayer(p, ${LARGE_CRATER_CELL}.0, ${LARGE_CRATER_PROBABILITY}, ${LARGE_CRATER_RADIUS[0]}.0,
+                           ${LARGE_CRATER_RADIUS[1]}.0, 100u, cellSize)
+      + craterLayer(p, ${SMALL_CRATER_CELL}.0, ${SMALL_CRATER_PROBABILITY}, ${SMALL_CRATER_RADIUS[0]}.0,
+                    ${SMALL_CRATER_RADIUS[1]}.0, 200u, cellSize)) * craterScale;
+  }
+  return height;
 }
 
 // The fraction of the sun that a surface point can see, from 0 to 1.
@@ -243,7 +270,7 @@ fn terrainHeight(p: vec2f, octaves: u32, cellSize: f32) -> vec3f {
 fn sunVisibility(sampleXZ: vec2f, cellSize: f32) -> f32 {
   // The ray starts on the same simplified surface that it tests against. A small offset above
   // that surface prevents the surface from shadowing itself.
-  let startHeight = terrainHeight(sampleXZ, SHADOW_OCTAVES, cellSize).x;
+  let startHeight = scaledHeight(sampleXZ, SHADOW_OCTAVES, cellSize).x;
   let origin = vec3f(sampleXZ.x, startHeight + 0.5, sampleXZ.y);
   var visibility = 1.0;
   var t = SHADOW_FIRST_STEP;
@@ -252,7 +279,7 @@ fn sunVisibility(sampleXZ: vec2f, cellSize: f32) -> f32 {
     if (ray.y > MAX_TERRAIN_HEIGHT) {
       break;
     }
-    let clearance = ray.y - terrainHeight(ray.xz, SHADOW_OCTAVES, cellSize).x;
+    let clearance = ray.y - scaledHeight(ray.xz, SHADOW_OCTAVES, cellSize).x;
     visibility = min(visibility, SHADOW_SOFTNESS * clearance / t);
     if (visibility <= 0.0) {
       return 0.0;
@@ -270,7 +297,7 @@ fn makeVertex(column: u32, row: u32, withShadow: bool) -> VertexOutput {
   let angle = uniforms.gridYaw + (f32(column) / f32(GRID_COLUMNS - 1u) * 2.0 - 1.0) * GRID_HALF_ANGLE;
   let gridXZ = uniforms.gridCenter + radius * vec2f(sin(angle), cos(angle));
   let sampleXZ = gridXZ + uniforms.worldPos.xz;
-  let terrain = terrainHeight(sampleXZ, NOISE_OCTAVES, cellSize);
+  let terrain = scaledHeight(sampleXZ, NOISE_OCTAVES, cellSize);
   var output: VertexOutput;
   output.position = uniforms.viewProjection * vec4f(gridXZ.x, terrain.x, gridXZ.y, 1.0);
   output.worldNormal = normalize(vec3f(-terrain.y, 1.0, -terrain.z));
@@ -303,11 +330,18 @@ fn vs_wire(@builtin(vertex_index) index: u32) -> VertexOutput {
   return makeVertex(segment / (GRID_ROWS - 1u), segment % (GRID_ROWS - 1u) + end, false);
 }
 
+// The height and its slope with the height scale of the style. The scale also changes the slope.
+fn scaledHeight(p: vec2f, octaves: u32, cellSize: f32) -> vec3f {
+  return terrainHeight(p, octaves, cellSize) * uniforms.style.x;
+}
+
 @fragment
 fn fs_solid(input: VertexOutput) -> @location(0) vec4f {
-  // Low ground is darker than high ground.
-  let shade = mix(0.3, 0.55, saturate(input.height / 400.0 + 0.5));
-  return vec4f(applyShadowedLight(vec3f(shade, shade, shade), input.worldNormal, input.sunVisibility), 1.0);
+  // Low ground has the low color, high ground has the high color, and slopes are a little darker.
+  let height = saturate(input.height / (400.0 * max(uniforms.style.x, 0.01)) + 0.5);
+  let normal = normalize(input.worldNormal);
+  let base = mix(uniforms.lowColor.rgb, uniforms.highColor.rgb, height) * (0.75 + 0.25 * normal.y);
+  return vec4f(applyShadowedLight(base, normal, input.sunVisibility), 1.0);
 }
 
 @fragment
@@ -320,7 +354,9 @@ fn fs_wire(input: VertexOutput) -> @location(0) vec4f {
 // and gridCenter (2). The struct size is a multiple of 16 bytes.
 const WORLD_POS_OFFSET = 16;
 const GRID_YAW_OFFSET = 19;
-const UNIFORM_FLOATS = 24;
+// lowColor (4 floats), highColor (4), and style (4) follow gridCenter.
+const STYLE_OFFSET = 24;
+const UNIFORM_FLOATS = 36;
 
 export class Terrain {
   private readonly device: Device;
@@ -362,7 +398,10 @@ export class Terrain {
 
     // Both pipelines share one layout so that the same bind groups work for both.
     const bindGroupLayout = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+      // The fragment shader reads the colors of the style.
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout, light.bindGroupLayout] });
     this.bindGroup = device.createBindGroup({
@@ -397,6 +436,15 @@ export class Terrain {
   }
 
   // The grid vertices are in world space, so the terrain needs no model matrix.
+  // Set the colors and the height scale of the terrain.
+  setStyle(style: TerrainStyle): void {
+    this.device.queue.writeBuffer(
+      this.uniformBuffer,
+      STYLE_OFFSET * Float32Array.BYTES_PER_ELEMENT,
+      new Float32Array([...style.lowColor, 0, ...style.highColor, 0, style.heightScale, style.craterScale, 0, 0]),
+    );
+  }
+
   setViewProjection(viewProjection: Mat4): void {
     this.device.queue.writeBuffer(this.uniformBuffer, 0, viewProjection);
   }
