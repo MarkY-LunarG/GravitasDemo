@@ -128,9 +128,7 @@ PixelSize Platform::CurrentPixelSize() {
     return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
 }
 
-void Platform::Present() {
-    surface_.Present();
-}
+void Platform::Present() { surface_.Present(); }
 
 // The assets are in assets/ next to the executable. CMake copies them there after each build.
 std::string Platform::AssetDirectory() const {

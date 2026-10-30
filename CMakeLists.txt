@@ -38,14 +38,48 @@ set(HACKATHON_ASSETS
     textures/LunarG-Logo-NeonTube-Transparent.png
 )
 
+# The WGSL shaders. cmake/embed_shaders.cmake puts them into generated/shaders.h.
+set(HACKATHON_SHADERS
+    shaders/blit.wgsl
+    shaders/fade.wgsl
+    shaders/gpu_timer.wgsl
+    shaders/light.wgsl
+    shaders/noise.wgsl
+    shaders/ship.wgsl
+    shaders/ship_effects.wgsl
+    shaders/ship_glow.wgsl
+    shaders/sky.wgsl
+    shaders/sky_planet.wgsl
+    shaders/sky_planet_fragment.wgsl
+    shaders/terrain.wgsl
+)
+list(TRANSFORM HACKATHON_SHADERS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+include(cmake/embed_shaders.cmake)
+
 add_executable(hackathon
     src/main.cpp
     src/app/app.cpp
+    src/app/blit.cpp
+    src/app/fade.cpp
+    src/app/gpu_timer.cpp
+    src/app/light.cpp
+    src/app/scenes/scenes.cpp
+    src/app/scenes/terrain_scene.cpp
+    src/app/ship.cpp
+    src/app/sky.cpp
+    src/app/terrain.cpp
     src/platform/gpu_init.cpp
     src/platform/options.cpp
     src/platform/platform_glfw.cpp
+    src/util/gltf.cpp
+    src/util/mat4.cpp
+    src/util/screenshot.cpp
+    src/util/shader_builder.cpp
 )
 target_include_directories(hackathon PRIVATE src)
+# cgltf is a third-party header, so the project warnings do not apply to it.
+target_include_directories(hackathon SYSTEM PRIVATE external/cgltf external/stb)
+hackathon_embed_shaders(hackathon ${HACKATHON_SHADERS})
 
 if (MSVC)
     target_compile_options(hackathon PRIVATE /W4)

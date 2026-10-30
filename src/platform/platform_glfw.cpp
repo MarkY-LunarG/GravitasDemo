@@ -39,8 +39,8 @@ std::unique_ptr<Platform> Platform::Create(const char* title, uint32_t width, ui
     // WebGPU draws into the window, so GLFW must not make an OpenGL or WebGL context.
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-    platform->window_ =
-        glfwCreateWindow(static_cast<int>(width), static_cast<int>(height), title, nullptr, nullptr);
+    platform->window_ = glfwCreateWindow(static_cast<int>(width), static_cast<int>(height), title,
+                                         nullptr, nullptr);
     if (!platform->window_) {
         ShowMessage("GLFW cannot make a window");
         return nullptr;
@@ -75,7 +75,8 @@ Platform::~Platform() {
     glfwTerminate();
 }
 
-bool Platform::ConfigureSurface(const wgpu::Adapter& adapter, const wgpu::Device& device) {
+bool Platform::ConfigureSurface(const wgpu::Adapter& adapter, const wgpu::Device& device,
+                                bool copySource) {
     wgpu::SurfaceCapabilities capabilities;
     if (surface_.GetCapabilities(adapter, &capabilities) != wgpu::Status::Success ||
         capabilities.formatCount == 0) {
@@ -114,10 +115,19 @@ bool Platform::ConfigureSurface(const wgpu::Adapter& adapter, const wgpu::Device
         alphaMode = wgpu::CompositeAlphaMode::Opaque;
     }
 
+    wgpu::TextureUsage usage = wgpu::TextureUsage::RenderAttachment;
+    if (copySource) {
+        if (!(capabilities.usages & wgpu::TextureUsage::CopySrc)) {
+            ShowMessage("The surface textures cannot be copied, so screenshots are not possible");
+            return false;
+        }
+        usage |= wgpu::TextureUsage::CopySrc;
+    }
+
     configuration_ = {
         .device = device,
         .format = format,
-        .usage = wgpu::TextureUsage::RenderAttachment,
+        .usage = usage,
         .width = 0,
         .height = 0,
         .alphaMode = alphaMode,
@@ -146,7 +156,8 @@ wgpu::TextureView Platform::AcquireFrame(PixelSize& size) {
     switch (surfaceTexture.status) {
         case wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal:
         case wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal:
-            return surfaceTexture.texture.CreateView();
+            currentTexture_ = surfaceTexture.texture;
+            return currentTexture_.CreateView();
         case wgpu::SurfaceGetCurrentTextureStatus::Outdated:
         case wgpu::SurfaceGetCurrentTextureStatus::Lost:
             // Configure the surface again for the next frame.
@@ -159,13 +170,9 @@ wgpu::TextureView Platform::AcquireFrame(PixelSize& size) {
     return nullptr;
 }
 
-double Platform::NowSeconds() const {
-    return glfwGetTime();
-}
+double Platform::NowSeconds() const { return glfwGetTime(); }
 
-bool Platform::CloseRequested() const {
-    return glfwWindowShouldClose(window_) != 0;
-}
+bool Platform::CloseRequested() const { return glfwWindowShouldClose(window_) != 0; }
 
 bool Platform::ReadAsset(std::string_view path, std::vector<uint8_t>& contents) const {
     const std::string fullPath = AssetDirectory() + std::string(path);

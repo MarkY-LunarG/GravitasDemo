@@ -47,14 +47,18 @@ class Platform {
     const wgpu::Surface& Surface() const { return surface_; }
 
     // Configure the surface for a device. Selects the format, the present mode (mailbox if the
-    // surface supports it), and the alpha mode.
-    bool ConfigureSurface(const wgpu::Adapter& adapter, const wgpu::Device& device);
+    // surface supports it), and the alpha mode. With copySource, the surface textures can also be
+    // copied, for screenshots.
+    bool ConfigureSurface(const wgpu::Adapter& adapter, const wgpu::Device& device,
+                          bool copySource);
     wgpu::TextureFormat SurfaceFormat() const { return configuration_.format; }
 
     // Get a view of the surface texture of the next frame, and its size. Returns null when no frame
     // can be drawn now, for example when the window is minimized. Configures the surface again when
     // its size changes.
     wgpu::TextureView AcquireFrame(PixelSize& size);
+    // The texture of the last AcquireFrame().
+    const wgpu::Texture& CurrentTexture() const { return currentTexture_; }
     // Show the frame of the last AcquireFrame(). The browser shows it without a call.
     void Present();
 
@@ -83,6 +87,7 @@ class Platform {
     wgpu::Instance instance_;
     wgpu::Surface surface_;
     wgpu::SurfaceConfiguration configuration_ = {};
+    wgpu::Texture currentTexture_;
     // True while the surface is configured. The surface must be unconfigured before release.
     bool configured_ = false;
     // True when the next AcquireFrame() must configure the surface again, for example after an

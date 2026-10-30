@@ -10,34 +10,30 @@ namespace {
 
 std::atomic<bool> gDeviceLost = false;
 
-std::string ToString(wgpu::StringView message) {
-    return std::string(std::string_view(message));
-}
+std::string ToString(wgpu::StringView message) { return std::string(std::string_view(message)); }
 
 }  // namespace
 
-bool DeviceLost() {
-    return gDeviceLost.load();
-}
+bool DeviceLost() { return gDeviceLost.load(); }
 
 GpuInit::GpuInit(const wgpu::Instance& instance, const wgpu::Surface& surface)
     : shared_(std::make_shared<Shared>()) {
     wgpu::RequestAdapterOptions options;
     options.compatibleSurface = surface;
     options.powerPreference = wgpu::PowerPreference::HighPerformance;
-    instance.RequestAdapter(
-        &options, wgpu::CallbackMode::AllowProcessEvents,
-        [shared = shared_](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter,
-                           wgpu::StringView message) {
-            if (status != wgpu::RequestAdapterStatus::Success || !adapter) {
-                shared->error = "No WebGPU adapter is available: " + ToString(message);
-                shared->state = State::Failed;
-                return;
-            }
-            shared->adapter = std::move(adapter);
-            shared->state = State::RequestingDevice;
-            RequestDevice(shared);
-        });
+    instance.RequestAdapter(&options, wgpu::CallbackMode::AllowProcessEvents,
+                            [shared = shared_](wgpu::RequestAdapterStatus status,
+                                               wgpu::Adapter adapter, wgpu::StringView message) {
+                                if (status != wgpu::RequestAdapterStatus::Success || !adapter) {
+                                    shared->error =
+                                        "No WebGPU adapter is available: " + ToString(message);
+                                    shared->state = State::Failed;
+                                    return;
+                                }
+                                shared->adapter = std::move(adapter);
+                                shared->state = State::RequestingDevice;
+                                RequestDevice(shared);
+                            });
 }
 
 void GpuInit::RequestDevice(const std::shared_ptr<Shared>& shared) {

@@ -18,6 +18,9 @@ struct Options {
     uint64_t frames = 0;
     // Stop at the results page, with no click on Exit.
     bool exitOnFinish = false;
+    // Write the output of this frame (from 1) to screenshot_<frame>.png. 0 writes no screenshot.
+    // Desktop only.
+    uint64_t screenshotFrame = 0;
 };
 
 // Parse "--name=value" arguments. Returns false and writes an error for an unknown or incorrect

@@ -69,11 +69,13 @@ void RunFrame() {
 bool Platform::CreateSurface() {
     // glfwCreateWindow() can give the canvas a fixed CSS size. The page sets the CSS size, and
     // CurrentPixelSize() sets the size in pixels.
-    EM_ASM({
-        const canvas = document.querySelector(UTF8ToString($0));
-        canvas.style.removeProperty('width');
-        canvas.style.removeProperty('height');
-    }, kCanvas);
+    EM_ASM(
+        {
+            const canvas = document.querySelector(UTF8ToString($0));
+            canvas.style.removeProperty('width');
+            canvas.style.removeProperty('height');
+        },
+        kCanvas);
 
     wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector source;
     source.selector = kCanvas;
@@ -133,19 +135,19 @@ void Platform::Present() {
 }
 
 // --preload-file puts the assets in /assets of the virtual file system.
-std::string Platform::AssetDirectory() const {
-    return "/assets/";
-}
+std::string Platform::AssetDirectory() const { return "/assets/"; }
 
 void Platform::ShowMessage(const std::string& message) {
     std::fprintf(stderr, "%s\n", message.c_str());
-    EM_ASM({
-        const element = document.getElementById('error');
-        if (element) {
-            element.textContent = UTF8ToString($0);
-            element.hidden = false;
-        }
-    }, message.c_str());
+    EM_ASM(
+        {
+            const element = document.getElementById('error');
+            if (element) {
+                element.textContent = UTF8ToString($0);
+                element.hidden = false;
+            }
+        },
+        message.c_str());
 }
 
 void RunMainLoop(std::function<bool()> frame, std::function<void()> exit) {
@@ -158,8 +160,8 @@ void RunMainLoop(std::function<bool()> frame, std::function<void()> exit) {
 std::vector<std::string> OptionArguments(int /*argc*/, char** /*argv*/) {
     // "?scene=3&exitOnFinish" becomes "--scene=3" and "--exit-on-finish": a capital letter in a
     // name becomes "-" and the lowercase letter.
-    const char* query = emscripten_run_script_string(
-        "new URLSearchParams(location.search).toString()");
+    const char* query =
+        emscripten_run_script_string("new URLSearchParams(location.search).toString()");
     std::vector<std::string> arguments;
     std::stringstream stream(query ? query : "");
     std::string item;

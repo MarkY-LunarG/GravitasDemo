@@ -31,8 +31,9 @@ bool ParseOptions(const std::vector<std::string>& arguments, Options& options, s
     for (const std::string& argument : arguments) {
         const size_t equals = argument.find('=');
         const std::string_view name = std::string_view(argument).substr(0, equals);
-        const std::string_view value =
-            equals == std::string::npos ? std::string_view() : std::string_view(argument).substr(equals + 1);
+        const std::string_view value = equals == std::string::npos
+                                           ? std::string_view()
+                                           : std::string_view(argument).substr(equals + 1);
 
         bool valid = true;
         if (name == "--scene") {
@@ -41,6 +42,8 @@ bool ParseOptions(const std::vector<std::string>& arguments, Options& options, s
             valid = ParseNumber(value, options.fixedStep) && options.fixedStep >= 0.0;
         } else if (name == "--frames") {
             valid = ParseNumber(value, options.frames);
+        } else if (name == "--screenshot") {
+            valid = ParseNumber(value, options.screenshotFrame) && options.screenshotFrame >= 1;
         } else if (name == "--exit-on-finish") {
             valid = value.empty();
             options.exitOnFinish = true;

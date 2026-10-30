@@ -7,7 +7,7 @@ The benchmark is being ported from TypeScript to C++.
   See `ts/README.md` for how to run it and for a description of the scenes.
   It stays until the C++ version has the same output, and then it is removed.
 - The rest of the repository: the C++ version, for the desktop and for the browser.
-  It now opens a window and clears it to a color that changes over time (milestone 1).
+  It now plays the first benchmark scene: the terrain, the ship, and the stars (milestone 2).
   See "Status" below.
 
 The C++ version has two targets from one source:
@@ -115,17 +115,41 @@ build/release/hackathon [options]
 
 | Option             | URL query        | Effect                                                    |
 | ------------------ | ---------------- | --------------------------------------------------------- |
-| `--scene=<n>`      | `?scene=<n>`     | Start at a benchmark scene. Not used yet.                 |
+| `--scene=<n>`      | `?scene=<n>`     | Start at benchmark scene `n` (from 1).                    |
 | `--fixed-step=<s>` | `?fixedStep=<s>` | Advance the animation by `s` seconds in each frame.       |
 | `--frames=<n>`     | `?frames=<n>`    | Stop after `n` frames.                                    |
-| `--exit-on-finish` | `?exitOnFinish`  | Stop at the results page with no click. Not used yet.     |
+| `--exit-on-finish` | `?exitOnFinish`  | Stop after the last scene, when its result is written.    |
+| `--screenshot=<n>` |                  | Desktop: write frame `n` (from 1) to `screenshot_<n>.png`. |
 
 In the browser, give the options in the URL, for example `index.html?frames=120&fixedStep=0.016667`.
 An unknown or incorrect option stops the run, and the page shows the error.
 
-`Esc` or the window close button stops the desktop target.
-In milestone 1, a click writes `Click at (x, y) pixels` to stdout or to the browser console.
-The position is in pixels of the surface, from the upper left.
+With `--fixed-step`, the animation is the same in each run, so frame `n` shows the same image.
+That makes `--screenshot` and capture frame ranges repeatable.
+`--screenshot` writes the PNG file in the current directory.
+It adds the `CopySrc` usage to the surface, so do not use it in a capture that must match a normal
+run.
+
+| Key   | Action                                          |
+| ----- | ----------------------------------------------- |
+| `W`   | Toggle between the solid and wireframe terrain. |
+| `N`   | Go to the next scene.                           |
+| `Esc` | Exit the application (desktop only).            |
+
+The window close button also exits the desktop application.
+
+At the end of each scene, the application writes the benchmark result of the scene to stdout, or
+to the browser console:
+
+```text
+Scene "Terrain and ship": 2438 frames in 20.0 s, 121.9 fps, GPU render pass 7.59 ms
+```
+
+The GPU time is the time of the main render pass, from timestamp queries, when the adapter has
+the `timestamp-query` feature.
+In the browser, the animation advances at most 0.1 s in one frame, for example after the tab was
+hidden, but the result uses the real time.
+After the last scene, the window is black until the results page is ported (milestone 4).
 
 ## Capture
 
@@ -157,6 +181,16 @@ The replay plays all of the frames with no other error.
 The port has six milestones: the skeleton, the core objects and the terrain scene, scenes 2 to 4,
 the intro and the results page, parity with the TypeScript version, and the removal of `ts/`.
 
+Milestone 2 (core objects and the terrain scene) is verified on the same Linux system:
+
+- Desktop: the terrain scene plays for its 20 seconds, writes its result, and stops with
+  `--exit-on-finish`.
+  Screenshots show the terrain with craters and shadows, the stars, and the ship with its engine
+  glow, and at 18.5 s the ship flies off with the boost.
+  Two runs with `--fixed-step` give the same screenshot, byte for byte.
+- Desktop capture: a 300-frame Premium-GFXR capture has 300 frames and replays with no error.
+- Browser: the wasm64 build passes. It is not run in a browser yet.
+
 Milestone 1 (skeleton) is verified on Linux (Wayland, AMD Radeon 890M, Mesa 26.2.5):
 
 - Desktop: the build has no warnings, and the `desktop_link` test passes.
@@ -181,7 +215,22 @@ Not verified yet:
 | File                          | Contents                                                     |
 | ----------------------------- | ------------------------------------------------------------ |
 | `src/main.cpp`                | The entry point and the main loop of both targets.           |
-| `src/app/app.cpp`             | The application. It draws a frame into a texture view.      |
+| `src/app/app.cpp`             | The scenes, the camera path, the sun, the ship placement, and the frames. |
+| `src/app/scenes/scene.h`      | The `Scene` interface, and the shared objects that scenes can use. |
+| `src/app/scenes/scenes.cpp`   | The list of scenes, in the order that they play.             |
+| `src/app/scenes/terrain_scene.cpp` | Scene 1: the terrain and the ship.                      |
+| `src/app/terrain.cpp`         | The terrain grid: pipelines, and the solid and wireframe modes. |
+| `src/app/ship.cpp`            | The ship: pipelines, the engine animations, and the engine state. |
+| `src/app/sky.cpp`             | The background: stars, and as options a nebula, a planet, and an atmosphere. |
+| `src/app/light.cpp`           | The directional light that all objects share.                |
+| `src/app/fade.cpp`            | The fade to black between scenes.                            |
+| `src/app/blit.cpp`            | Copies the scene image to the output in the post pass.       |
+| `src/app/gpu_timer.cpp`       | GPU time of the render pass, from a timestamp query set.     |
+| `src/util/mat4.cpp`           | 4x4 matrix and quaternion functions.                         |
+| `src/util/gltf.cpp`           | The glTF loader (with cgltf) and the animation sampler.      |
+| `src/util/shader_builder.cpp` | WGSL constants and placeholders for the shaders.             |
+| `src/util/screenshot.cpp`     | Writes a texture to a PNG file, for `--screenshot`.          |
+| `shaders/`                    | The WGSL shaders. The build puts them into the executable.   |
 | `src/platform/platform.h`     | The interface between the application and the platform.     |
 | `src/platform/platform_glfw.cpp` | Window, surface configuration, keys, time, and asset files. |
 | `src/platform/platform_native.cpp` | Desktop: native surface, pointer, main loop, assets.     |
@@ -193,6 +242,9 @@ Not verified yet:
 | `CMakePresets.json`           | The configure, build, test, and workflow presets.            |
 | `cmake/dependencies.cmake`    | Dawn and GLFW for the desktop target, at fixed versions.     |
 | `cmake/emscripten.cmake`      | The compile and link options of the browser target.          |
+| `cmake/embed_shaders.cmake`   | Puts `shaders/*.wgsl` into the generated header `shaders.h`. |
 | `external/emdawnwebgpu/`      | The emdawnwebgpu version of the browser target.              |
+| `external/cgltf/`, `external/stb/` | The glTF parser, and the PNG reader and writer.         |
+| `.clang-format`               | The C++ format of `src/`.                                    |
 | `assets/`                     | The ship model and the intro images, for both versions.      |
 | `scripts/check_desktop_link.py` | The check that Premium-GFXR can capture the desktop target. |

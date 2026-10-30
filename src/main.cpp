@@ -6,9 +6,12 @@
 #include "platform/gpu_init.h"
 #include "platform/options.h"
 #include "platform/platform.h"
+#include "util/screenshot.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <memory>
+#include <string>
 
 namespace hackathon {
 namespace {
@@ -16,6 +19,11 @@ namespace {
 constexpr uint32_t kWidth = 1920;
 constexpr uint32_t kHeight = 1080;
 constexpr const char* kShipModel = "lunarg-ship/lunarg_ship.glb";
+#ifdef __EMSCRIPTEN__
+// A frame can come after a long pause, for example when the tab was hidden. Limit the time step of
+// the animation, so that it does not jump. The benchmark result uses the real time.
+constexpr double kMaxAnimationStep = 0.1;
+#endif
 
 // All objects of a run. The main loop owns it, because in the browser main() returns before the
 // first frame. The members are released in reverse order: the App, the device, and then the
@@ -42,13 +50,15 @@ class Program {
             return false;
         }
 
-        // Milestone 1 reads one asset, to check the asset copy on the desktop and the preload in
-        // the browser.
-        std::vector<uint8_t> model;
-        if (!platform_->ReadAsset(kShipModel, model)) {
+        std::vector<uint8_t> modelFile;
+        std::string error;
+        if (!platform_->ReadAsset(kShipModel, modelFile)) {
             return false;
         }
-        std::printf("Read %s: %zu bytes\n", kShipModel, model.size());
+        if (!ParseGlb(modelFile, shipModel_, error)) {
+            Platform::ShowMessage(std::string(kShipModel) + ": " + error);
+            return false;
+        }
 
         gpu_ = std::make_unique<GpuInit>(platform_->Instance(), platform_->Surface());
         return true;
@@ -81,45 +91,79 @@ class Program {
         }
 
         const double now = platform_->NowSeconds();
-        const double seconds = options_.fixedStep > 0.0 ? options_.fixedStep : now - previousTime_;
+        const double realSeconds = now - previousTime_;
         previousTime_ = now;
+        double animationSeconds = options_.fixedStep > 0.0 ? options_.fixedStep : realSeconds;
+#ifdef __EMSCRIPTEN__
+        animationSeconds = std::min(animationSeconds, kMaxAnimationStep);
+#endif
 
         PixelSize size;
         const wgpu::TextureView view = platform_->AcquireFrame(size);
         if (!view) {
             return true;
         }
-        app_->Frame(seconds, view, size.width, size.height);
+        app_->Frame(animationSeconds, realSeconds, view, size.width, size.height);
+        ++frameCount_;
+        if (frameCount_ == options_.screenshotFrame) {
+            screenshot_.Capture(gpu_->Device(), platform_->CurrentTexture(),
+                                "screenshot_" + std::to_string(frameCount_) + ".png");
+        }
         platform_->Present();
 
-        ++frameCount_;
-        return options_.frames == 0 || frameCount_ < options_.frames;
+        if (app_->ExitRequested() || (options_.exitOnFinish && app_->Finished())) {
+            return false;
+        }
+        // Continue until the screenshot is written, also after the last frame.
+        return options_.frames == 0 || frameCount_ < options_.frames || screenshot_.Pending();
     }
 
   private:
     bool StartApp() {
-        if (!platform_->ConfigureSurface(gpu_->Adapter(), gpu_->Device())) {
+        if (!platform_->ConfigureSurface(gpu_->Adapter(), gpu_->Device(),
+                                         options_.screenshotFrame > 0)) {
             return false;
         }
-        app_ = std::make_unique<App>(gpu_->Device(), platform_->SurfaceFormat());
+        std::string error;
+        app_ =
+            App::Create(gpu_->Device(), platform_->SurfaceFormat(), std::move(shipModel_), error);
+        if (!app_) {
+            Platform::ShowMessage(error);
+            return false;
+        }
+        app_->JumpToScene(options_.scene);
         previousTime_ = platform_->NowSeconds();
         return true;
     }
 
     void OnKey(Key key) {
+        switch (key) {
+            case Key::Escape:
+                // The browser target has no Esc key: a page does not close itself.
 #ifndef __EMSCRIPTEN__
-        if (key == Key::Escape) {
-            std::printf("Esc pressed.\n");
-            exitRequested_ = true;
-        }
-#else
-        (void)key;
+                std::printf("Esc pressed.\n");
+                exitRequested_ = true;
 #endif
+                break;
+            case Key::W:
+                if (app_) {
+                    app_->ToggleTerrainRenderMode();
+                }
+                break;
+            case Key::N:
+                if (app_) {
+                    app_->NextScene();
+                }
+                break;
+        }
     }
 
     Options options_;
     std::unique_ptr<Platform> platform_;
     std::unique_ptr<GpuInit> gpu_;
+    Screenshot screenshot_;
+    // The ship model, from Start() until the App takes it.
+    GltfModel shipModel_;
     std::unique_ptr<App> app_;
     double previousTime_ = 0.0;
     uint64_t frameCount_ = 0;
