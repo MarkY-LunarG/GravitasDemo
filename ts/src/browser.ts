@@ -9,13 +9,13 @@ import type { IntroImages } from './intro-logo.js';
 import type { RgbaImage } from './png.js';
 
 // Vite copies the model into the build output and changes this URL to point to the copy.
-const SHIP_MODEL_URL = new URL('../lunarg-ship/lunarg_ship.glb', import.meta.url);
+const SHIP_MODEL_URL = new URL('../../assets/lunarg-ship/lunarg_ship.glb', import.meta.url);
 // The images of the intro (the file names are also in INTRO_IMAGE_FILES). Vite needs each URL as
 // one literal string.
 const INTRO_IMAGE_URLS = {
-  colorLogo: new URL('../textures/2025-LunarG-Color-Logo-with-tagline.png', import.meta.url),
-  neon: new URL('../textures/LunarG-Logo-Neon-Transparent.png', import.meta.url),
-  neonTube: new URL('../textures/LunarG-Logo-NeonTube-Transparent.png', import.meta.url),
+  colorLogo: new URL('../../assets/textures/2025-LunarG-Color-Logo-with-tagline.png', import.meta.url),
+  neon: new URL('../../assets/textures/LunarG-Logo-Neon-Transparent.png', import.meta.url),
+  neonTube: new URL('../../assets/textures/LunarG-Logo-NeonTube-Transparent.png', import.meta.url),
 };
 
 // Load an image, and get its pixels with no premultiplied alpha, as the PNG file has them.

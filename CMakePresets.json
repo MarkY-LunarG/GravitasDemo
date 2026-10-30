@@ -1,0 +1,136 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "native",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "clang",
+      "hidden": true,
+      "description": "Clang, as Premium-GFXR uses for Dawn. GCC 16 rejects Tint at the Dawn pin.",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "inherits": ["native", "clang"],
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "linux-release",
+      "inherits": ["native", "clang"],
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "macos-debug",
+      "inherits": "native",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "macos-release",
+      "inherits": "native",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "windows",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/build/msvc"
+    },
+    {
+      "name": "emscripten-debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/emscripten/debug",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HACKATHON_WASM64": "ON"
+      }
+    },
+    {
+      "name": "emscripten-release",
+      "inherits": "emscripten-debug",
+      "binaryDir": "${sourceDir}/build/emscripten/release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "emscripten-wasm32-debug",
+      "inherits": "emscripten-debug",
+      "binaryDir": "${sourceDir}/build/emscripten-wasm32/debug",
+      "cacheVariables": { "HACKATHON_WASM64": "OFF" }
+    },
+    {
+      "name": "emscripten-wasm32-release",
+      "inherits": "emscripten-release",
+      "binaryDir": "${sourceDir}/build/emscripten-wasm32/release",
+      "cacheVariables": { "HACKATHON_WASM64": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "macos-debug", "configurePreset": "macos-debug" },
+    { "name": "macos-release", "configurePreset": "macos-release" },
+    { "name": "windows-debug", "configurePreset": "windows", "configuration": "Debug" },
+    { "name": "windows-release", "configurePreset": "windows", "configuration": "Release" },
+    { "name": "emscripten-debug", "configurePreset": "emscripten-debug" },
+    { "name": "emscripten-release", "configurePreset": "emscripten-release" },
+    { "name": "emscripten-wasm32-debug", "configurePreset": "emscripten-wasm32-debug" },
+    { "name": "emscripten-wasm32-release", "configurePreset": "emscripten-wasm32-release" }
+  ],
+  "testPresets": [
+    { "name": "linux-debug", "configurePreset": "linux-debug", "output": { "outputOnFailure": true } },
+    { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } }
+  ],
+  "workflowPresets": [
+    {
+      "name": "linux-debug",
+      "steps": [
+        { "type": "configure", "name": "linux-debug" },
+        { "type": "build", "name": "linux-debug" },
+        { "type": "test", "name": "linux-debug" }
+      ]
+    },
+    {
+      "name": "linux-release",
+      "steps": [
+        { "type": "configure", "name": "linux-release" },
+        { "type": "build", "name": "linux-release" },
+        { "type": "test", "name": "linux-release" }
+      ]
+    },
+    {
+      "name": "emscripten-release",
+      "steps": [
+        { "type": "configure", "name": "emscripten-release" },
+        { "type": "build", "name": "emscripten-release" }
+      ]
+    },
+    {
+      "name": "emscripten-wasm32-release",
+      "steps": [
+        { "type": "configure", "name": "emscripten-wasm32-release" },
+        { "type": "build", "name": "emscripten-wasm32-release" }
+      ]
+    }
+  ]
+}

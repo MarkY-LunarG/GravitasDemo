@@ -27,8 +27,8 @@ const SURFACE_FORMAT = 'bgra8unorm';
 const PRESENT_MODE = 'mailbox';
 
 // The path is relative to this file, so it is correct from src/ (tsx) and from dist/ (tsc).
-const SHIP_MODEL_PATH = fileURLToPath(new URL('../lunarg-ship/lunarg_ship.glb', import.meta.url));
-const TEXTURES_DIRECTORY = fileURLToPath(new URL('../textures/', import.meta.url));
+const SHIP_MODEL_PATH = fileURLToPath(new URL('../../assets/lunarg-ship/lunarg_ship.glb', import.meta.url));
+const TEXTURES_DIRECTORY = fileURLToPath(new URL('../../assets/textures/', import.meta.url));
 
 // Read and decode the images of the intro.
 function loadIntroImages(): IntroImages {
