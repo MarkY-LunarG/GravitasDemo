@@ -47,6 +47,15 @@ WgslConstants& WgslConstants::Abstract(std::string_view name, double value) {
     return *this;
 }
 
+WgslConstants& WgslConstants::AbstractInt(std::string_view name, int64_t value) {
+    text_ += "const ";
+    text_ += name;
+    text_ += " = ";
+    text_ += std::to_string(value);
+    text_ += ";\n";
+    return *this;
+}
+
 WgslConstants& WgslConstants::Raw(std::string_view name, std::string_view type,
                                   std::string_view value) {
     text_ += "const ";

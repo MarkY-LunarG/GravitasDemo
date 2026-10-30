@@ -6,6 +6,7 @@
 #include "app/light.h"
 #include "app/ship.h"
 #include "app/terrain.h"
+#include "util/format.h"
 
 #include <algorithm>
 #include <array>
@@ -174,9 +175,10 @@ constexpr double kStatsInterval = 20.0;
 }  // namespace
 
 std::unique_ptr<App> App::Create(const wgpu::Device& device, wgpu::TextureFormat format,
-                                 GltfModel shipModel, std::string& error) {
+                                 GltfModel shipModel, const IntroImages* introImages,
+                                 std::string& error) {
     std::unique_ptr<App> app(new App(device, format));
-    if (!app->Initialize(std::move(shipModel), error)) {
+    if (!app->Initialize(std::move(shipModel), introImages, error)) {
         return nullptr;
     }
     return app;
@@ -187,7 +189,7 @@ App::App(const wgpu::Device& device, wgpu::TextureFormat format)
 
 App::~App() = default;
 
-bool App::Initialize(GltfModel shipModel, std::string& error) {
+bool App::Initialize(GltfModel shipModel, const IntroImages* introImages, std::string& error) {
     gpuTimer_ = GpuTimer::Create(device_);
     // All objects in all scenes use this one light. A scene can change its direction and colors.
     defaultSun_ = {
@@ -205,6 +207,7 @@ bool App::Initialize(GltfModel shipModel, std::string& error) {
     PlaceShip();
     fade_ = std::make_unique<Fade>(device_, format_, kDepthFormat);
     blit_ = std::make_unique<Blit>(device_, format_);
+    resultsPage_ = std::make_unique<ResultsPage>(device_, format_);
 
     const SharedObjects shared = {
         .device = device_,
@@ -218,6 +221,9 @@ bool App::Initialize(GltfModel shipModel, std::string& error) {
         .cameraStart = CameraEye(0.0),
         .moveShip = [this](const Vec3& offset, const ShipTurn& turn) { PlaceShip(offset, turn); },
     };
+    if (introImages) {
+        scenes_.push_back(CreateIntroScene(shared, *introImages));
+    }
     for (const SceneFactory& createScene : BenchmarkScenes()) {
         scenes_.push_back(createScene(shared));
     }
@@ -257,12 +263,12 @@ const std::string& App::SceneName() const {
     return SceneAt(scenes_, elapsed_).scene->Properties().name;
 }
 
-void App::PointerMove(float /*x*/, float /*y*/) {
-    // The results page uses the pointer. It comes in milestone 4.
-}
+void App::PointerMove(float x, float y) { resultsPage_->SetPointer(x, y); }
 
-void App::Click(float /*x*/, float /*y*/) {
-    // The Exit button of the results page sets exitPressed_. It comes in milestone 4.
+void App::Click(float x, float y) {
+    if (Finished() && resultsPage_->IsOnExitButton(x, y)) {
+        exitPressed_ = true;
+    }
 }
 
 bool App::PastEnd() const {
@@ -322,7 +328,7 @@ void App::Frame(double animationSeconds, double statsSeconds, const wgpu::Textur
         finalStatsReported_ = true;
     }
     if (Finished()) {
-        DrawFinished(colorView);
+        DrawResults(colorView, width, height);
         return;
     }
     const ScenePosition position = SceneAt(scenes_, elapsed_);
@@ -468,18 +474,14 @@ void App::Render(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& c
     device_.GetQueue().Submit(1, &commands);
 }
 
-// After the last scene. The results page comes in milestone 4. Until then, the output is black.
-void App::DrawFinished(const wgpu::TextureView& colorView) {
-    const wgpu::RenderPassColorAttachment attachment = {
-        .view = colorView,
-        .loadOp = wgpu::LoadOp::Clear,
-        .storeOp = wgpu::StoreOp::Store,
-        .clearValue = {0.0, 0.0, 0.0, 1.0},
-    };
-    const wgpu::RenderPassDescriptor descriptor = {.colorAttachmentCount = 1,
-                                                   .colorAttachments = &attachment};
+// After the last scene: the results page.
+void App::DrawResults(const wgpu::TextureView& colorView, uint32_t width, uint32_t height) {
+    std::vector<std::string> sceneNames;
+    for (const Scene* scene : benchmarkScenes_) {
+        sceneNames.push_back(scene->Properties().name);
+    }
     const wgpu::CommandEncoder encoder = device_.CreateCommandEncoder();
-    encoder.BeginRenderPass(&descriptor).End();
+    resultsPage_->Draw(encoder, colorView, width, height, sceneNames, results_);
     const wgpu::CommandBuffer commands = encoder.Finish();
     device_.GetQueue().Submit(1, &commands);
 }
@@ -491,8 +493,9 @@ void App::ReportStats(const Scene& scene) {
     const double fps = stats.seconds > 0.0 ? stats.frames / stats.seconds : 0.0;
     const std::string name = scene.Properties().name;
     auto write = [name, stats, fps](const std::string& gpu) {
-        std::printf("Scene \"%s\": %llu frames in %.1f s, %.1f fps%s\n", name.c_str(),
-                    static_cast<unsigned long long>(stats.frames), stats.seconds, fps, gpu.c_str());
+        std::printf("Scene \"%s\": %llu frames in %s s, %s fps%s\n", name.c_str(),
+                    static_cast<unsigned long long>(stats.frames), ToFixed1(stats.seconds).c_str(),
+                    ToFixed1(fps).c_str(), gpu.c_str());
     };
     stats_ = {};
     // A scene that is not part of the benchmark (the intro) has no result. Its GPU time does not go
@@ -513,12 +516,8 @@ void App::ReportStats(const Scene& scene) {
     pendingReports_ += 1;
     gpuTimer_->ReadTotal([this, write](double milliseconds, uint32_t gpuFrames) {
         pendingReports_ -= 1;
-        char text[64] = "";
-        if (gpuFrames > 0) {
-            std::snprintf(text, sizeof(text), ", GPU render pass %.2f ms",
-                          milliseconds / gpuFrames);
-        }
-        write(text);
+        write(gpuFrames > 0 ? ", GPU render pass " + ToFixed2(milliseconds / gpuFrames) + " ms"
+                            : std::string());
     });
 }
 

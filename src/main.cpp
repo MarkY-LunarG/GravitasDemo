@@ -8,6 +8,8 @@
 #include "platform/platform.h"
 #include "util/screenshot.h"
 
+#include <stb_image.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <memory>
@@ -57,6 +59,11 @@ class Program {
         }
         if (!ParseGlb(modelFile, shipModel_, error)) {
             Platform::ShowMessage(std::string(kShipModel) + ": " + error);
+            return false;
+        }
+        if (!ReadImage(kIntroColorLogoFile, introImages_.colorLogo) ||
+            !ReadImage(kIntroNeonFile, introImages_.neon) ||
+            !ReadImage(kIntroNeonTubeFile, introImages_.neonTube)) {
             return false;
         }
 
@@ -125,14 +132,39 @@ class Program {
             return false;
         }
         std::string error;
-        app_ =
-            App::Create(gpu_->Device(), platform_->SurfaceFormat(), std::move(shipModel_), error);
+        app_ = App::Create(gpu_->Device(), platform_->SurfaceFormat(), std::move(shipModel_),
+                           &introImages_, error);
+        // The App has made its textures, so the image data is not necessary any more.
+        introImages_ = {};
         if (!app_) {
             Platform::ShowMessage(error);
             return false;
         }
         app_->JumpToScene(options_.scene);
         previousTime_ = platform_->NowSeconds();
+        return true;
+    }
+
+    // Read and decode a PNG image below assets/ to RGBA, with no premultiplied alpha.
+    bool ReadImage(const char* path, RgbaImage& image) const {
+        std::vector<uint8_t> file;
+        if (!platform_->ReadAsset(path, file)) {
+            return false;
+        }
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        stbi_uc* pixels = stbi_load_from_memory(file.data(), static_cast<int>(file.size()), &width,
+                                                &height, &channels, 4);
+        if (!pixels) {
+            Platform::ShowMessage(std::string("Cannot decode ") + path + ": " +
+                                  stbi_failure_reason());
+            return false;
+        }
+        image.width = static_cast<uint32_t>(width);
+        image.height = static_cast<uint32_t>(height);
+        image.data.assign(pixels, pixels + size_t{image.width} * image.height * 4);
+        stbi_image_free(pixels);
         return true;
     }
 
@@ -164,6 +196,7 @@ class Program {
     Screenshot screenshot_;
     // The ship model, from Start() until the App takes it.
     GltfModel shipModel_;
+    IntroImages introImages_;
     std::unique_ptr<App> app_;
     double previousTime_ = 0.0;
     uint64_t frameCount_ = 0;
@@ -192,7 +225,12 @@ int main(int argc, char** argv) {
     }
     RunMainLoop([program] { return program->Frame(); },
                 [program]() mutable {
+#ifdef __EMSCRIPTEN__
+                    // A page cannot close itself, so tell the user, as the TypeScript version does.
+                    Platform::ShowMessage("The benchmark has stopped. You can close this page.");
+#else
                     std::printf("The benchmark has stopped.\n");
+#endif
                     program.reset();
                 });
     return 0;

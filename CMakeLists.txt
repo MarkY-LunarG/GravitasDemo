@@ -45,10 +45,12 @@ set(HACKATHON_SHADERS
     shaders/asteroid_shape.wgsl
     shaders/asteroid_update.wgsl
     shaders/blit.wgsl
+    shaders/bloom.wgsl
     shaders/buildings.wgsl
     shaders/clouds.wgsl
     shaders/fade.wgsl
     shaders/gpu_timer.wgsl
+    shaders/intro_logo.wgsl
     shaders/lens_flare.wgsl
     shaders/light.wgsl
     shaders/lightning.wgsl
@@ -56,6 +58,7 @@ set(HACKATHON_SHADERS
     shaders/rain.wgsl
     shaders/reentry_flame.wgsl
     shaders/reentry_smoke.wgsl
+    shaders/results_page.wgsl
     shaders/ship.wgsl
     shaders/ship_effects.wgsl
     shaders/ship_glow.wgsl
@@ -72,18 +75,22 @@ add_executable(hackathon
     src/app/app.cpp
     src/app/asteroids.cpp
     src/app/blit.cpp
+    src/app/bloom.cpp
     src/app/buildings.cpp
     src/app/clouds.cpp
     src/app/fade.cpp
     src/app/gpu_timer.cpp
+    src/app/intro_logo.cpp
     src/app/lens_flare.cpp
     src/app/light.cpp
     src/app/lightning.cpp
     src/app/rain.cpp
     src/app/reentry.cpp
+    src/app/results_page.cpp
     src/app/scenes/asteroid_scene.cpp
     src/app/scenes/city_scene.cpp
     src/app/scenes/entry_scene.cpp
+    src/app/scenes/intro_scene.cpp
     src/app/scenes/scenes.cpp
     src/app/scenes/terrain_scene.cpp
     src/app/ship.cpp
@@ -93,7 +100,9 @@ add_executable(hackathon
     src/platform/gpu_init.cpp
     src/platform/options.cpp
     src/platform/platform_glfw.cpp
+    src/util/format.cpp
     src/util/gltf.cpp
+    src/util/image.cpp
     src/util/mat4.cpp
     src/util/screenshot.cpp
     src/util/shader_builder.cpp

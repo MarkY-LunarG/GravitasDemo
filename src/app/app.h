@@ -8,11 +8,13 @@
 // The App does not know about the window or the target. main.cpp makes the device, loads the ship
 // model, sends key and pointer events to the App, and calls Frame() once for each frame.
 //
-// Milestone 2 of the port: the intro and the results page are not ported yet. After the last
-// scene, the App draws black.
+// With the intro images, the intro scene comes before the benchmark scenes. After the last scene,
+// the App draws the results page, which has an Exit button.
 
 #pragma once
 
+#include "app/intro_logo.h"
+#include "app/results_page.h"
 #include "app/scenes/scene.h"
 #include "util/gltf.h"
 #include "util/mat4.h"
@@ -33,20 +35,14 @@ class GpuTimer;
 class Ship;
 class Terrain;
 
-// The benchmark result of one scene.
-struct SceneResult {
-    int number;
-    std::string name;
-    uint64_t frames;
-    double seconds;
-};
-
 class App {
   public:
-    // format is the format of the texture views that Frame() draws into. Returns null and writes an
-    // error if the ship model is not correct.
+    // format is the format of the texture views that Frame() draws into. With introImages, the
+    // intro scene comes before the benchmark scenes. Returns null and writes an error if the ship
+    // model is not correct.
     static std::unique_ptr<App> Create(const wgpu::Device& device, wgpu::TextureFormat format,
-                                       GltfModel shipModel, std::string& error);
+                                       GltfModel shipModel, const IntroImages* introImages,
+                                       std::string& error);
     ~App();
     App(const App&) = delete;
     App& operator=(const App&) = delete;
@@ -66,8 +62,8 @@ class App {
     // Give a click of the main mouse button at a position in pixels of the view.
     void Click(float x, float y);
 
-    // Go to the start of a benchmark scene. The scene numbers start at 1. Scene 0 is the first
-    // scene.
+    // Go to the start of a benchmark scene. The scene numbers start at 1, and the intro has no
+    // number. Scene 0 is the first scene, which is the intro if there is one.
     void JumpToScene(int sceneNumber);
     // Go to the start of the next scene, or to the first scene after the last scene.
     void NextScene();
@@ -92,14 +88,14 @@ class App {
     };
 
     App(const wgpu::Device& device, wgpu::TextureFormat format);
-    bool Initialize(GltfModel shipModel, std::string& error);
+    bool Initialize(GltfModel shipModel, const IntroImages* introImages, std::string& error);
 
     bool PastEnd() const;
     void JumpToIndex(size_t index);
     CameraResult UpdateCamera(double aspect, std::optional<double> fixedAngle, double lookAhead);
     void Render(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& colorView,
                 uint32_t width, uint32_t height, Scene& scene, double fade);
-    void DrawFinished(const wgpu::TextureView& colorView);
+    void DrawResults(const wgpu::TextureView& colorView, uint32_t width, uint32_t height);
     void ReportStats(const Scene& scene);
     void PlaceShip(const Vec3& offset = {0.0, 0.0, 0.0}, const ShipTurn& turn = {});
 
@@ -117,6 +113,7 @@ class App {
     std::unique_ptr<Ship> ship_;
     std::unique_ptr<Fade> fade_;
     std::unique_ptr<Blit> blit_;
+    std::unique_ptr<ResultsPage> resultsPage_;
     std::vector<std::unique_ptr<Scene>> scenes_;
     // The scenes of the benchmark: scenes_ with no intro.
     std::vector<Scene*> benchmarkScenes_;

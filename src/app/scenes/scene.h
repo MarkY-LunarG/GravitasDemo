@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "app/intro_logo.h"
 #include "app/terrain.h"
 #include "util/mat4.h"
 
@@ -151,6 +152,8 @@ std::vector<SceneFactory> BenchmarkScenes();
 
 // The create functions of the scenes.
 std::unique_ptr<Scene> CreateTerrainScene(const SharedObjects& shared);
+// The intro is not in BenchmarkScenes(). The App puts it first when it has the intro images.
+std::unique_ptr<Scene> CreateIntroScene(const SharedObjects& shared, const IntroImages& images);
 std::unique_ptr<Scene> CreateAsteroidScene(const SharedObjects& shared);
 std::unique_ptr<Scene> CreateEntryScene(const SharedObjects& shared);
 std::unique_ptr<Scene> CreateCityScene(const SharedObjects& shared);

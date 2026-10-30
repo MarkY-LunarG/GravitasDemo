@@ -34,6 +34,9 @@ class WgslConstants {
     // A declaration with no type, as `const NAME = 0.55;`. A float value is then an abstract
     // float, as in a shader that has the number in its text.
     WgslConstants& Abstract(std::string_view name, double value);
+    // A declaration of an abstract integer, as `const NAME = 5;`. WGSL converts it to the type that
+    // each use needs, for example f32 or u32.
+    WgslConstants& AbstractInt(std::string_view name, int64_t value);
     // A declaration with a type and a value that the caller writes, for example an array.
     WgslConstants& Raw(std::string_view name, std::string_view type, std::string_view value);
 

@@ -7,9 +7,9 @@ The benchmark is being ported from TypeScript to C++.
   See `ts/README.md` for how to run it and for a description of the scenes.
   It stays until the C++ version has the same output, and then it is removed.
 - The rest of the repository: the C++ version, for the desktop and for the browser.
-  It now plays the four benchmark scenes: the terrain, the asteroids, the atmospheric entry, and
-  the city (milestone 3).
-  The intro and the results page come in milestone 4.
+  It now has all of the parts of the TypeScript version (milestone 4): the intro, the four
+  benchmark scenes (the terrain, the asteroids, the atmospheric entry, and the city), and the
+  results page.
   See "Status" below.
 
 The C++ version has two targets from one source:
@@ -151,7 +151,12 @@ The GPU time is the time of the main render pass, from timestamp queries, when t
 the `timestamp-query` feature.
 In the browser, the animation advances at most 0.1 s in one frame, for example after the tab was
 hidden, but the result uses the real time.
-After the last scene, the window is black until the results page is ported (milestone 4).
+First, a 14-second intro shows the LunarG logo, and the ship takes the place of the G.
+The intro is not part of the benchmark results, and `--scene=<n>` starts after it.
+After the last scene, the window shows the results page: a table with the frames and the frames per
+second of each scene, and an Exit button.
+A click on Exit stops the application.
+In the browser, the page then shows "The benchmark has stopped. You can close this page."
 
 ## Capture
 
@@ -182,6 +187,20 @@ The replay plays all of the frames with no other error.
 
 The port has six milestones: the skeleton, the core objects and the terrain scene, scenes 2 to 4,
 the intro and the results page, parity with the TypeScript version, and the removal of `ts/`.
+
+Milestone 4 (the intro and the results page) is verified on the same Linux system:
+
+- Desktop: the whole sequence plays: the intro, the four scenes, and the results page.
+  `--exit-on-finish` stops at the results page.
+- Parity: five intro frames (at 2, 6, 9, 10.3, and 12 seconds) are the same as the TypeScript
+  frames, pixel for pixel.
+  The results page is the same as the TypeScript results page, pixel for pixel, for the same
+  results.
+- Known behavior of both versions: the results page selects its text scale from the height of the
+  view. In a view that is wide for its height, for example 2560 x 1508, the table is wider than the
+  view, and its sides are cut off.
+- Browser: the wasm64 build passes. It is not run in a browser yet.
+- Not verified: the click on Exit, which needs a person at the window.
 
 Milestone 3 (scenes 2 to 4) is verified on the same Linux system:
 
@@ -241,6 +260,12 @@ Not verified yet:
 | `src/app/reentry.cpp`         | The re-entry fire around the ship, and its smoke.            |
 | `src/app/buildings.cpp`       | Reflective towers, two cube maps of reflections, and render bundles. |
 | `src/app/lens_flare.cpp`      | The lens flare of the sun, with occlusion queries.           |
+| `src/app/scenes/intro_scene.cpp` | The intro: the LunarG logo, and the ship in the place of the G. |
+| `src/app/intro_logo.cpp`      | The logo of the intro: the three logo images and the tube flicker. |
+| `src/app/bloom.cpp`           | The bloom filter of the intro.                               |
+| `src/app/results_page.cpp`    | The results page: a table of the scene results and an Exit button. |
+| `src/util/format.cpp`         | Number text that matches the TypeScript version.             |
+| `src/util/image.cpp`          | The PNG decoder (stb_image) for the intro images.            |
 | `src/app/terrain.cpp`         | The terrain grid: pipelines, and the solid and wireframe modes. |
 | `src/app/ship.cpp`            | The ship: pipelines, the engine animations, and the engine state. |
 | `src/app/sky.cpp`             | The background: stars, and as options a nebula, a planet, and an atmosphere. |
