@@ -33,6 +33,9 @@ export interface SkyOptions {
   // A dark blue background with a purple and green nebula. Without it, the background is black.
   readonly nebula: boolean;
   readonly planet: PlanetOptions | null;
+  // A yellow-brown planet below the horizon, with an atmosphere. setAtmosphere() sets how deep the
+  // camera is in the atmosphere. Without it, the sky ignores setAtmosphere().
+  readonly atmosphere?: boolean;
 }
 
 // The ring and the moons, relative to the planet radius R.
@@ -221,11 +224,24 @@ struct Body {
 }
 
 const NEBULA: bool = ${options.nebula};
+const ATMOSPHERE: bool = ${options.atmosphere ?? false};
+// The horizontal heading. The tilt of the horizon goes up along it.
+const HEADING: vec3f = ${wgslVec3(heading)};
 ${options.planet ? planetConstants(options.planet, heading) : ''}
 
-// The inverse of the view-projection matrix without the camera translation. It changes a clip
-// position to a view direction.
-@group(0) @binding(0) var<uniform> inverseViewProjection: mat4x4f;
+struct SkyUniforms {
+  // The inverse of the view-projection matrix without the camera translation. It changes a clip
+  // position to a view direction.
+  inverseViewProjection: mat4x4f,
+  // x: how deep the camera is in the atmosphere (0 is space, 1 is deep).
+  // y: the brightness of a lightning flash.
+  // z: the sine of the angle of the horizon below the horizontal.
+  // w: the tangent of the tilt of the horizon. The horizon is higher along the heading.
+  atmosphere: vec4f,
+  // xy: the flash position in clip space. z: the width of the view divided by its height.
+  flashPosition: vec4f,
+}
+@group(0) @binding(0) var<uniform> sky: SkyUniforms;
 
 struct VertexOutput {
   @builtin(position) position: vec4f,
@@ -305,9 +321,52 @@ struct Layer {
   color: vec4f,
 }
 
+// 2D noise from the 3D noise, for the cloud tops of the planet.
+fn fbm2(p: vec2f, seed: u32) -> f32 {
+  return fbm3(vec3f(p, 0.5), seed);
+}
+
+// The planet below the horizon, its glowing edge, and the haze of the atmosphere over the
+// background color.
+fn atmosphere(dir: vec3f, background: vec3f, clip: vec2f) -> vec3f {
+  let depth = sky.atmosphere.x;
+  // The flash lights the haze near the flash position, and a little everywhere.
+  let flashOffset = (clip - sky.flashPosition.xy) * vec2f(sky.flashPosition.z, 1.0);
+  let flash = sky.atmosphere.y * (0.08 + 0.6 * exp(-dot(flashOffset, flashOffset) * 2.0));
+  // The tilt makes the horizon higher in the directions along the heading, and lower behind.
+  let horizon = -sky.atmosphere.z + sky.atmosphere.w * dot(dir, HEADING);
+  let sun = saturate(dot(dir, light.direction));
+  var color = background;
+  if (dir.y < horizon) {
+    // The cloud tops of the planet, on a plane below the camera, so far clouds are smaller.
+    let below = max(horizon - dir.y, 0.003);
+    let ground = dir.xz / below * 0.15;
+    let bands = fbm2(vec2f(ground.x * 0.6, ground.y * 1.6), 700u);
+    let detail = fbm2(ground * 3.0, 710u);
+    var surface = mix(vec3f(0.42, 0.3, 0.14), vec3f(0.78, 0.62, 0.34), saturate(bands * 0.7 + 0.5));
+    surface *= 0.8 + 0.35 * detail;
+    surface *= light.color * (0.55 + 0.45 * light.direction.y);
+    // Far cloud tops fade into the haze at the horizon.
+    color = mix(surface, vec3f(0.85, 0.68, 0.4), exp(-below * 18.0));
+  }
+  // The thin bright edge of the atmosphere at the horizon, seen from space.
+  let edge = exp(-abs(dir.y - horizon) * 45.0);
+  color += vec3f(0.95, 0.7, 0.35) * edge * (1.0 - depth) * 0.8;
+  // In the atmosphere, the haze covers the stars and the far cloud tops. It is brighter near the
+  // horizon and toward the sun, and darker above.
+  let height = saturate((dir.y - horizon) * 2.5);
+  var haze = mix(vec3f(0.82, 0.64, 0.36), vec3f(0.36, 0.25, 0.12), height);
+  haze += vec3f(0.35, 0.25, 0.1) * pow(sun, 8.0);
+  let cover = depth * select(1.0, 0.75, dir.y < horizon);
+  color = mix(color, haze * light.color, cover);
+  // Lightning lights the haze.
+  color += vec3f(0.6, 0.6, 0.7) * flash * depth;
+  return color;
+}
+
 @fragment
 fn fs_sky(input: VertexOutput) -> @location(0) vec4f {
-  let p = inverseViewProjection * vec4f(input.clip, 0.5, 1.0);
+  let p = sky.inverseViewProjection * vec4f(input.clip, 0.5, 1.0);
   let dir = normalize(p.xyz / p.w);
   // The derivatives must be in uniform control flow, so calculate them first.
   let ddx = dpdx(dir);
@@ -323,6 +382,9 @@ fn fs_sky(input: VertexOutput) -> @location(0) vec4f {
   ${starLayers}
 
   ${options.planet ? PLANET_FRAGMENT : ''}
+  if (ATMOSPHERE) {
+    color = atmosphere(dir, color, input.clip);
+  }
   return vec4f(color, 1.0);
 }
 `;
@@ -346,8 +408,10 @@ export class Sky {
   ) {
     this.device = device;
     this.light = light;
+    // The inverse view-projection matrix (16 floats), and the atmosphere and flash position
+    // vectors (4 floats each).
     this.uniformBuffer = device.createBuffer({
-      size: 16 * Float32Array.BYTES_PER_ELEMENT,
+      size: 24 * Float32Array.BYTES_PER_ELEMENT,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     const layout = device.createBindGroupLayout({
@@ -373,6 +437,34 @@ export class Sky {
   setCamera(viewProjection: Mat4, cameraPosition: Vec3): void {
     const atOrigin = multiply(viewProjection, translationScale(cameraPosition, [1, 1, 1]));
     this.device.queue.writeBuffer(this.uniformBuffer, 0, invert(atOrigin));
+  }
+
+  // Set how deep the camera is in the atmosphere (0 is space, 1 is deep), the brightness of a
+  // lightning flash and its position in clip space, the angle in radians of the horizon below the
+  // horizontal, the tilt of the horizon in radians (higher along the heading), and the width of the
+  // view divided by its height.
+  setAtmosphere(
+    depth: number,
+    flash: number,
+    flashPosition: [number, number],
+    horizonDip: number,
+    horizonTilt: number,
+    aspect: number,
+  ): void {
+    this.device.queue.writeBuffer(
+      this.uniformBuffer,
+      16 * Float32Array.BYTES_PER_ELEMENT,
+      new Float32Array([
+        depth,
+        flash,
+        Math.sin(horizonDip),
+        Math.tan(horizonTilt),
+        flashPosition[0],
+        flashPosition[1],
+        aspect,
+        0,
+      ]),
+    );
   }
 
   draw(pass: RenderPassEncoder): void {

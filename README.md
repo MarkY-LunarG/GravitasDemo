@@ -11,6 +11,8 @@ The hills and craters move toward the ship, but the ship does not move.
 The camera moves around the ship on a path that repeats every 20 seconds.
 The application is a benchmark with a sequence of scenes.
 After 40 seconds, the terrain goes away, and the ship flies through a field of asteroids.
+After 80 seconds, the ship falls into the atmosphere of a yellow-brown planet, with re-entry
+heating, clouds, rain, and lightning.
 The LunarG ship (`lunarg-ship/lunarg_ship.glb`) is in the center of the view and faces away from
 the camera.
 
@@ -52,6 +54,28 @@ If npm reports that it did not run their install scripts, the application still 
 
 The Vite development server loads the changes when you save a file.
 
+To start at a scene, give its number (from 1):
+
+```sh
+npm start -- --scene=3
+```
+
+In the browser, add `?scene=3` to the URL.
+In both targets, the `N` key goes to the next scene.
+
+At the end of each scene, the application writes the benchmark result of the scene to the console:
+
+```text
+Scene "Terrain and ship": 5163 frames in 40.0 s, 129.1 fps, GPU render pass 7.26 ms
+```
+
+The last scene has no end, so it writes its result after each 20 seconds.
+The GPU time is the time of the main render pass, from timestamp queries.
+The post pass (the copy to the output and screen effects such as the rain on the lens) is not in
+the GPU time.
+It is only available when the adapter has the `timestamp-query` feature.
+Compute passes, for example the asteroid update, are not in the GPU time.
+
 ## Build
 
 Desktop: compile the TypeScript to JavaScript in `dist/`, then run the result:
@@ -83,6 +107,7 @@ npm run typecheck
 | Key   | Action                                          |
 | ----- | ----------------------------------------------- |
 | `W`   | Toggle between the solid and wireframe terrain. |
+| `N`   | Go to the next scene.                           |
 | `Esc` | Exit the application (desktop only).            |
 
 The window close button also exits the desktop application.
@@ -97,6 +122,13 @@ The window close button also exits the desktop application.
 | `src/sky.ts`         | The background: stars, and as options a nebula and a ringed planet.   |
 | `src/noise.ts`       | WGSL hash and 3D Perlin noise that the asteroids and the sky use.     |
 | `src/ship-path.ts`   | A smooth ship path from sine waves, in TypeScript and in WGSL.        |
+| `src/clouds.ts`      | Blended cloud sprites, sorted far to near, drawn with `drawIndexedIndirect`. |
+| `src/rain.ts`        | Rain on the camera lens: streaks, still drops, and mist, in the post pass. |
+| `src/blit.ts`        | Copies the scene image to the output in the post pass.                |
+| `src/lightning.ts`   | Lightning flashes at the edges of the screen, with a blend constant.  |
+| `src/reentry.ts`     | The re-entry fire around the ship, and its smoke.                     |
+| `src/gpu-timer.ts`   | GPU time of the render pass, from a timestamp query set.              |
+| `src/scenes/entry-scene.ts` | Scene 3: the atmospheric entry.                               |
 | `src/scenes/scene.ts` | The `Scene` interface, and the shared objects that scenes can use.   |
 | `src/scenes/index.ts` | The list of scenes, in the order that they play.                     |
 | `src/scenes/terrain-scene.ts` | Scene 1: the terrain and the ship.                           |
@@ -196,13 +228,16 @@ order:
 | Scene                | File                | Duration   | Contents                         |
 | -------------------- | ------------------- | ---------- | -------------------------------- |
 | `Terrain and ship`   | `terrain-scene.ts`  | 40 seconds | The terrain, the ship, and stars. |
-| `Asteroids and ship` | `asteroid-scene.ts` | No end     | The ship moves around the asteroids, with a planet, a nebula, and stars. The camera does not move. |
+| `Asteroids and ship` | `asteroid-scene.ts` | 40 seconds | The ship moves around the asteroids, with a planet, a nebula, and stars. The camera does not move. |
+| `Atmospheric entry`  | `entry-scene.ts`    | No end     | The ship falls into a planet atmosphere, seen from its right side. The engines are off. |
 
 The last scene continues until you stop the application.
 Between two scenes, the image fades to black in `TRANSITION_FADE_TIME` seconds (0.5), and then
 fades in from black in the same time.
-The engines continue across the transition.
-A scene with `stationaryCamera: true` keeps the camera at its start position.
+At the start of each scene, the ship is at its start position, with no boost and no heat.
+The engines are on, or off at once for a scene with `engines: false`.
+A scene with `cameraAngle` has a camera that does not move, at that angle in degrees around the
+ship: 0 is behind the ship, 90 is at its left side, and -90 is at its right side.
 Other scenes use the camera path.
 `App.sceneName` gives the name of the current scene.
 
@@ -210,7 +245,12 @@ The App (`src/app.ts`) owns the objects that all scenes share: the sun, the terr
 the camera and its path, and the fade.
 In each frame, the App moves the camera and updates the ship.
 Then it calls `update()` of the current scene, which can record compute passes.
-In the render pass, it calls `draw()` of the current scene, and then draws the ship and the fade.
+In the render pass, it calls `draw()` of the current scene, and then draws the ship.
+Then it calls `drawAfterShip()` of the current scene, for blended objects that the ship can fly
+through and for screen effects, and then draws the fade.
+The render pass draws into a scene texture.
+A second pass, the post pass, copies the scene texture to the output.
+Then it calls `drawPost()` of the current scene, for screen effects that read the scene image.
 A scene contains only its name, its duration, its own objects, and the shared objects that it draws.
 For example, the terrain scene moves and draws the shared terrain, and the asteroid scene makes and
 draws its own asteroids.
@@ -229,6 +269,83 @@ To add a scene:
 1. Write a file in `src/scenes/` with a function that takes the `SharedObjects` and returns a
    `Scene`.
 2. Add the function to `SCENES` in `src/scenes/index.ts`.
+
+## Atmospheric entry
+
+The camera is at the right side of the ship, so the front of the ship points to the right of the
+screen.
+The engines are off.
+The timeline, in seconds from the start of the scene:
+
+| Time    | Event                                                                        |
+| ------- | ---------------------------------------------------------------------------- |
+| 0 to 25 | The ship goes from space into the atmosphere: the horizon comes up, and haze covers the stars. |
+| 1 to 26 | Re-entry fire, strongest from 6 to 16: flames around the front of the ship that trail back, and smoke. It goes out as the rain starts. The ship shakes. |
+| From 10 | Clouds come past the ship.                                                   |
+| From 18 | Rain on the camera lens: thin water lines move straight from the front of the ship to its back. |
+| From 20 | Lightning flashes at the edges of the screen every 1.5 to 5 seconds.         |
+
+- Heating: `Ship.setHeat()` makes the hull surfaces that face forward glow, from orange to white.
+  A heat shell, the hull moved out along its normals and drawn with additive blending, adds a faint
+  glow around the front of the ship.
+- Fire light: the fire lights the whole ship with a flickering orange light, strongest on the
+  surfaces that face back into the flames.
+- Fire (`src/reentry.ts`): one quad along the flow, which turns around its axis to face the
+  camera.
+  Its shader makes turbulent flames that start just in front of the nose, wrap around the front of
+  the ship, and trail back, wider and wider.
+  The flames are white and yellow in the hot middle and near the front, and orange at the ragged
+  edges.
+  The ship hides the parts behind it, so the fire shows around the outline of the ship.
+- Smoke (`src/reentry.ts`): soft puffs start behind the fire, move back, grow, and fade.
+  Young puffs have an orange light from the fire.
+  The CPU sorts the puffs from far to near, and they draw with premultiplied alpha blending.
+- Plasma streaks: 160 additive ribbons on the solid parts of the ship add short-lived accents.
+  Each streak shows only at random times.
+- Sky: the `atmosphere` option of `Sky` draws the planet below the horizon, the bright edge of its
+  atmosphere, and the haze.
+  The horizon is tilted (`HORIZON_TILT`, 14 degrees): it is higher in front of the ship, at the
+  right of the screen, so the ship seems to go down into the planet.
+- Clouds (`src/clouds.ts`): soft sprites that face the camera.
+  The CPU sorts them from far to near in each frame, and they draw with premultiplied alpha
+  blending after the ship, so the ship flies through them.
+  One instanced `drawIndexedIndirect` call draws them.
+  The indirect buffer has the instance count, which the cloud density sets.
+- Rain on the lens (`src/rain.ts`): a separate shader in the post pass reads the scene image.
+  It makes a height field of the water on the glass: thin, long, slightly wavy lines of water that
+  move across the lens at a constant speed, small beads that the lines leave on their paths, and
+  a few still drops.
+  The back end of a line fades out.
+  The slope of the water bends the view through the drops, and the dry glass is a little misted
+  (`MIST_BLUR` and `MIST_LIGHT`).
+  The lines move straight from the front of the ship to its back (right to left).
+  The scene projects the ship axis to the screen for this direction, so it is correct for all
+  camera positions.
+  The blend uses the blend constant, and `setBlendConstant()` sets the rain intensity.
+- Lightning (`src/lightning.ts`): a flash has one to three quick pulses at a random point near the
+  edge of the screen.
+  The blend uses the blend constant, and `setBlendConstant()` sets the flash brightness.
+  The flash also lights the clouds and the haze near the flash position.
+
+The random values of the clouds and the lightning come from fixed seeds, so each run is the same.
+
+### Dawn entry points
+
+The scene uses these Dawn entry points from the list of the hackathon:
+
+- `wgpuRenderPassEncoderSetBlendConstant`: the rain on the lens and the lightning.
+- `wgpuRenderPassEncoderDrawIndexedIndirect`: the clouds (and the asteroids in scene 2).
+- `wgpuQuerySetGetCount` and `wgpuQuerySetGetType`: `src/gpu-timer.ts` reads `querySet.count` and
+  `querySet.type` to make the resolve buffer of the timestamp query set.
+
+The scene does not use these entry points:
+
+- `wgpuCommandEncoderWriteTimestamp`: `@kmamal/gpu` 1.0.0-6 rejects
+  `GPUCommandEncoder.writeTimestamp()` with the `timestamp-query` feature.
+  It needs an experimental Dawn feature that requires the `allow_unsafe_apis` toggle.
+  The GPU timer uses the `timestampWrites` of the render pass instead.
+- `wgpuBufferWriteMappedRange`: the JavaScript API has no call for it.
+  `getMappedRange()` and `unmap()` do not use it.
 
 ## Sky
 
@@ -375,9 +492,19 @@ It throws an error for other features, for example textures, skins, or STEP inte
 
 ## Known issues
 
+- With `@kmamal/gpu` 1.0.0-6, a `mapAsync()` in each frame sometimes stops the desktop application
+  with a native error (`std::system_error`, or a `pthread_mutex_lock` assertion), or makes it hang.
+  Thus the GPU timer reads its timestamps for only one frame in 15, with one buffer mapped at a
+  time.
+  With this change, two full runs had no errors, but the cause is in the native code, so it is
+  possible that the error still occurs.
 - At startup, Dawn shows two warnings about `maxDynamicUniformBuffersPerPipelineLayout` and
   `maxDynamicStorageBuffersPerPipelineLayout`.
   You can ignore them.
+- The desktop window takes the keyboard focus when it opens.
+  If you press `Esc` in another window, for example a terminal, while the application window has the
+  focus, the application stops.
+  The console then shows `Esc pressed.` and `The window closed.`
 - The application calls `process.exit()` when the window closes.
   If Node.js releases the Dawn objects in its usual shutdown, Dawn fails a `RefCounted` assertion
   and the process crashes.

@@ -9,8 +9,10 @@
 // browser target (src/browser.ts) both use it. Each target makes the GPU device, loads the ship
 // model, sends key events to the App, and calls App.frame() once for each frame.
 
+import { Blit } from './blit.js';
 import { Fade } from './fade.js';
 import { type GltfModel } from './gltf.js';
+import { GpuTimer } from './gpu-timer.js';
 import { DirectionalLight } from './light.js';
 import {
   type Mat4,
@@ -190,12 +192,33 @@ function sceneAt(scenes: readonly Scene[], seconds: number): { scene: Scene; sta
   return { scene: scenes[scenes.length - 1], start, fade: 0 };
 }
 
+// The benchmark result of one scene.
+interface SceneStats {
+  frames: number;
+  seconds: number;
+  gpuMilliseconds: number;
+  gpuFrames: number;
+}
+
+// A scene writes its result when it ends. A scene with no end writes its result after this many
+// seconds, and again after each interval.
+const STATS_INTERVAL = 20;
+
 export class App {
   private readonly device: GPUDevice;
+  // Null if the device cannot write timestamps. Then the results have no GPU time.
+  private readonly gpuTimer: GpuTimer | null;
+  private stats: SceneStats = { frames: 0, seconds: 0, gpuMilliseconds: 0, gpuFrames: 0 };
   private readonly terrain: Terrain;
   private readonly ship: Ship;
   private readonly fade: Fade;
+  private readonly blit: Blit;
+  private readonly format: GPUTextureFormat;
   private readonly scenes: readonly Scene[];
+  // The scene draws into this texture. Then a second pass copies it to the output, and screen
+  // effects of the scene can read it.
+  private sceneTexture: GPUTexture | null = null;
+  private sceneView: GPUTextureView | null = null;
   private currentScene: Scene | null = null;
   private depthTexture: GPUTexture | null = null;
   // The time in seconds since the first frame. The camera path and the scene sequence use it.
@@ -204,6 +227,7 @@ export class App {
   // format is the format of the texture views that frame() draws into.
   constructor(device: GPUDevice, format: GPUTextureFormat, shipModel: GltfModel) {
     this.device = device;
+    this.gpuTimer = GpuTimer.create(device);
     // All objects in all scenes use this one light.
     const sun = new DirectionalLight(
       device,
@@ -214,8 +238,9 @@ export class App {
     this.terrain = new Terrain(device, format, DEPTH_FORMAT, sun);
     this.ship = new Ship(device, format, DEPTH_FORMAT, sun, shipModel);
     placeShip(this.ship);
-    this.ship.setEnginesOn(true);
     this.fade = new Fade(device, format, DEPTH_FORMAT);
+    this.blit = new Blit(device, format);
+    this.format = format;
     const shared: SharedObjects = {
       device,
       format,
@@ -236,6 +261,26 @@ export class App {
     return sceneAt(this.scenes, this.elapsed).scene.name;
   }
 
+  // The number of scenes.
+  get sceneCount(): number {
+    return this.scenes.length;
+  }
+
+  // Go to the start of a scene. The scene numbers start at 1. The scene starts as after a normal
+  // transition: the ship is at its start position, and the scene time is 0.
+  jumpToScene(sceneNumber: number): void {
+    const index = Math.max(0, Math.min(this.scenes.length - 1, Math.floor(sceneNumber) - 1));
+    this.elapsed = this.scenes.slice(0, index).reduce((sum, scene) => sum + scene.duration, 0);
+    // Start just after the fade from black.
+    this.elapsed += index > 0 ? TRANSITION_FADE_TIME : 0;
+  }
+
+  // Go to the start of the next scene, or to the first scene after the last scene.
+  nextScene(): void {
+    const index = this.currentScene ? this.scenes.indexOf(this.currentScene) : 0;
+    this.jumpToScene(((index + 1) % this.scenes.length) + 1);
+  }
+
   toggleTerrainRenderMode(): void {
     this.terrain.setRenderMode(this.terrain.renderMode === 'solid' ? 'wireframe' : 'solid');
   }
@@ -245,13 +290,22 @@ export class App {
   frame(seconds: number, colorView: GPUTextureView, width: number, height: number): void {
     this.elapsed += seconds;
     const { scene, start, fade } = sceneAt(this.scenes, this.elapsed);
-    // Each scene starts with the ship at its start position, and with no boost.
+    // Each scene starts with the ship at its start position, with no boost and no heat.
     if (scene !== this.currentScene) {
+      if (this.currentScene) {
+        this.reportStats(this.currentScene);
+      }
       this.currentScene = scene;
       placeShip(this.ship);
       this.ship.setBoost(false);
+      this.ship.setHeat(0);
+      this.ship.resetEngines(scene.engines ?? true);
+    } else if (scene.duration === Infinity && this.stats.seconds >= STATS_INTERVAL) {
+      this.reportStats(scene);
     }
-    const { viewProjection, cameraPosition } = this.updateCamera(width / height, scene.stationaryCamera ?? false);
+    this.stats.frames += 1;
+    this.stats.seconds += seconds;
+    const { viewProjection, cameraPosition } = this.updateCamera(width / height, scene.cameraAngle);
     this.ship.update(seconds);
     const encoder = this.device.createCommandEncoder();
     scene.update?.({
@@ -261,16 +315,18 @@ export class App {
       speedScale: 1 + (BOOST_SPEED_SCALE - 1) * this.ship.boostLevel,
       viewProjection,
       cameraPosition,
+      width,
+      height,
       encoder,
     });
     this.render(encoder, colorView, width, height, scene, fade);
   }
 
-  // Move the camera along its path, or keep it at its start position for a stationary camera.
-  // Then give the camera to the shared objects. The terrain grid follows the camera, so that the
-  // grid always covers the view.
-  private updateCamera(aspect: number, stationary: boolean): { viewProjection: Mat4; cameraPosition: Vec3 } {
-    const eye = cameraEye(stationary ? 0 : cameraOrbitAngle(this.elapsed));
+  // Move the camera along its path, or put it at a fixed angle around the ship (in degrees). Then
+  // give the camera to the shared objects. The terrain grid follows the camera, so that the grid
+  // always covers the view.
+  private updateCamera(aspect: number, fixedAngle?: number): { viewProjection: Mat4; cameraPosition: Vec3 } {
+    const eye = cameraEye(fixedAngle !== undefined ? (fixedAngle * Math.PI) / 180 : cameraOrbitAngle(this.elapsed));
     const toShip = [SHIP_CENTER[0] - eye[0], 0, SHIP_CENTER[2] - eye[2]] as const;
     const length = Math.hypot(toShip[0], toShip[2]);
     this.terrain.setGridCenter(eye, [toShip[0] / length, 0, toShip[2] / length]);
@@ -290,7 +346,7 @@ export class App {
     scene: Scene,
     fade: number,
   ): void {
-    // The depth texture must have the same size as the color texture.
+    // The depth texture and the scene texture must have the same size as the output.
     if (!this.depthTexture || this.depthTexture.width !== width || this.depthTexture.height !== height) {
       this.depthTexture?.destroy();
       this.depthTexture = this.device.createTexture({
@@ -298,11 +354,20 @@ export class App {
         format: DEPTH_FORMAT,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
+      this.sceneTexture?.destroy();
+      this.sceneTexture = this.device.createTexture({
+        size: [width, height],
+        format: this.format,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      this.sceneView = this.sceneTexture.createView();
     }
+    const sceneView = this.sceneView!;
     const pass = encoder.beginRenderPass({
+      timestampWrites: this.gpuTimer?.timestampWrites,
       colorAttachments: [
         {
-          view: colorView,
+          view: sceneView,
           clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
           loadOp: 'clear',
           storeOp: 'store',
@@ -315,12 +380,38 @@ export class App {
         depthStoreOp: 'discard',
       },
     });
-    // The ship goes after the scene objects, because its flames and glow are blended and do not
-    // write depth. Objects that draw after them would cover them.
+    // The ship goes after the opaque scene objects, because its flames and glow are blended and
+    // do not write depth. Objects that draw after them would cover them. Blended scene objects that
+    // the ship can fly through, and screen effects, go after the ship.
     scene.draw(pass);
     this.ship.draw(pass);
+    scene.drawAfterShip?.(pass);
     this.fade.draw(pass, fade);
     pass.end();
+
+    // Copy the scene to the output, and then draw the screen effects that read the scene image.
+    const post = encoder.beginRenderPass({
+      colorAttachments: [{ view: colorView, loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store' }],
+    });
+    this.blit.draw(post, sceneView);
+    scene.drawPost?.(post, sceneView);
+    post.end();
+    this.gpuTimer?.resolve(encoder);
     this.device.queue.submit([encoder.finish()]);
+    // The GPU time comes later. It goes to the stats of the scene that is current at that time,
+    // which is the same scene, except for a frame or two at a scene change.
+    this.gpuTimer?.read((milliseconds) => {
+      this.stats.gpuMilliseconds += milliseconds;
+      this.stats.gpuFrames += 1;
+    });
+  }
+
+  // Write the benchmark result of a scene to the console, and start new stats.
+  private reportStats(scene: Scene): void {
+    const { frames, seconds, gpuMilliseconds, gpuFrames } = this.stats;
+    const fps = seconds > 0 ? frames / seconds : 0;
+    const gpu = gpuFrames > 0 ? `, GPU render pass ${(gpuMilliseconds / gpuFrames).toFixed(2)} ms` : '';
+    console.log(`Scene "${scene.name}": ${frames} frames in ${seconds.toFixed(1)} s, ${fps.toFixed(1)} fps${gpu}`);
+    this.stats = { frames: 0, seconds: 0, gpuMilliseconds: 0, gpuFrames: 0 };
   }
 }

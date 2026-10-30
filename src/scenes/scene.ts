@@ -3,8 +3,8 @@
 // The App (src/app.ts) owns the shared objects. In each frame, it moves the camera, updates and
 // draws the ship, and calls the update() and draw() of the current scene. A scene contains only
 // what is special to it: its name, its duration, its own objects, and which shared objects it draws.
-// The engines run in all scenes. When a scene starts, the App puts the ship back at its start
-// position and turns the boost off.
+// When a scene starts, the App puts the ship back at its start position, turns the boost and the
+// heat off, and sets the engines on or off for the scene.
 
 import type { Mat4, Vec3 } from '../mat4.js';
 import type { DirectionalLight } from '../light.js';
@@ -51,6 +51,9 @@ export interface FrameInfo {
   readonly speedScale: number;
   readonly viewProjection: Mat4;
   readonly cameraPosition: Vec3;
+  // The size of the view in pixels.
+  readonly width: number;
+  readonly height: number;
   // The command encoder of the frame. A scene can record compute passes in it. The render pass
   // comes after them.
   readonly encoder: GPUCommandEncoder;
@@ -61,10 +64,21 @@ export interface Scene {
   // The duration in seconds. The last scene can have a duration of Infinity, so that it continues
   // until the application stops.
   readonly duration: number;
-  // True to keep the camera at its start position. Otherwise, the camera follows its path.
-  readonly stationaryCamera?: boolean;
+  // False for a scene with the engines off. The engines are on or off at the start of the scene.
+  readonly engines?: boolean;
+  // A camera that does not move, at this angle in degrees around the ship: 0 is behind the ship,
+  // 90 is at its left side, and -90 is at its right side. The camera stays at the start distance
+  // and height, and looks at the start position of the ship. Without it, the camera follows its path.
+  readonly cameraAngle?: number;
   // Advance the scene objects. The App calls this before the render pass of the frame.
   update?(frame: FrameInfo): void;
   // Draw the scene objects. The App draws the ship after the scene objects.
   draw(pass: GPURenderPassEncoder): void;
+  // Draw blended objects that the ship can be behind or in, and screen effects. The App calls this
+  // after it draws the ship.
+  drawAfterShip?(pass: GPURenderPassEncoder): void;
+  // Draw screen effects that read the image of the scene, for example water on the camera lens.
+  // The App calls this in a second pass, after it copies the scene image to the output. The pass
+  // has no depth buffer. sceneView has the same size and format as the output.
+  drawPost?(pass: GPURenderPassEncoder, sceneView: GPUTextureView): void;
 }

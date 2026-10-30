@@ -10,7 +10,8 @@
 import { type GltfAnimation, type GltfModel, type GltfPrimitive, sampleChannel } from './gltf.js';
 import type { DepthFormat, Device, RenderPassEncoder, TextureFormat } from './gpu-types.js';
 import { type DirectionalLight, LIGHT_WGSL } from './light.js';
-import { type Mat4, type Quat, type Vec3, compose, multiply, transformPoint } from './mat4.js';
+import { type Mat4, type Quat, type Vec3, compose, invert, multiply, transformPoint } from './mat4.js';
+import { NOISE_WGSL } from './noise.js';
 
 // The animation names and the flame root node name, from lunarg-ship/README.md.
 const IGNITE_ANIMATION = 'EnginesIgnite';
@@ -45,8 +46,44 @@ const GLOW_RADIUS = 13;
 const GLOW_PULL = 6;
 const GLOW_BRIGHTNESS = 0.9;
 
-// The engine light uniform. The ship shader and the glow shader both use it.
-const ENGINE_LIGHT_WGSL = /* wgsl */ `
+// Re-entry heating. setHeat() sets the level from 0 to 1. The hull surfaces that face forward glow,
+// from orange to white. A heat shell, the hull moved HEAT_SHELL meters out along its normals (more
+// at the front, and stretched back by HEAT_TRAIL), adds a glowing bow shock around the outline of
+// the ship. The shell draws only its back faces, so the ship hides the shell, except at the outline.
+// The glow is brightest near the hull and fades to 0 at the outer edge of the shell.
+const HEAT_SHELL = 1.5;
+const HEAT_SHELL_FRONT = 5;
+const HEAT_TRAIL = 3;
+const HEAT_SHELL_BRIGHTNESS = 0.45;
+
+// Plasma streaks of the re-entry. Each streak starts at a random point on the surface of a solid
+// part of the ship (the hull, the pylon, or an engine), where the normal points forward or to the
+// side by more than STREAK_FRONT, and goes back along the flow. A streak is a ribbon that faces the
+// camera and gets wider toward its end. Its brightness moves along it with noise, so the plasma
+// seems to flow. The color goes from almost white at the ship, through pink and orange, to violet
+// at the end. Streaks at the outline of the ship, as the camera sees it, are brightest. Streaks over
+// the body have STREAK_BODY_BRIGHTNESS of that brightness, so they do not hide the body.
+const HULL_NODE = 'Hull';
+// The streaks are only an accent of the large flame of the scene: each streak shows only at random
+// times.
+const STREAK_COUNT = 160;
+// The light of the re-entry fire on the ship, at full heat: orange, strongest on the surfaces that
+// face back into the flame, and it flickers.
+const FIRE_LIGHT = [1.0, 0.42, 0.12] as const;
+const FIRE_LIGHT_STRENGTH = 1.3;
+const STREAK_FRONT = -0.05;
+const STREAK_BODY_BRIGHTNESS = 0.3;
+const STREAK_LENGTH = [25, 75] as const;
+const STREAK_WIDTH = [0.6, 2.2] as const;
+const STREAK_SPEED = [2, 5] as const;
+const STREAK_BRIGHTNESS = 0.4;
+const STREAK_SEED = 9031;
+// The local position (3 floats), local normal (3), and length, width, seed, and speed (4).
+const STREAK_FLOATS = 10;
+
+// The uniform with the effects of the whole ship: the engine lights, the heat, and the camera.
+// The ship shader and the glow shader both use it.
+const SHIP_EFFECTS_WGSL = /* wgsl */ `
 const ENGINE_LIGHT_COUNT: u32 = ${ENGINE_LIGHT_COUNT}u;
 const ENGINE_LIGHT_INTENSITY: f32 = ${ENGINE_LIGHT_INTENSITY};
 
@@ -56,11 +93,29 @@ struct EngineLight {
   // The color multiplied by the current strength. It is 0 when the engines are off.
   color: vec4f,
 }
-@group(0) @binding(1) var<uniform> engineLights: array<EngineLight, ENGINE_LIGHT_COUNT>;
+
+struct ShipEffects {
+  lights: array<EngineLight, ENGINE_LIGHT_COUNT>,
+  // xyz is the world direction of the ship front, and w is the heat level (0 to 1).
+  heat: vec4f,
+  // The camera position. w is the time in seconds, for the plasma streaks.
+  camera: vec4f,
+  viewProjection: mat4x4f,
+}
+@group(0) @binding(1) var<uniform> effects: ShipEffects;
+
+// The color of hot metal and plasma: orange, then yellow, then white.
+fn heatColor(level: f32) -> vec3f {
+  let t = saturate(level);
+  return mix(mix(vec3f(1.0, 0.22, 0.04), vec3f(1.0, 0.65, 0.2), saturate(t * 2.0)),
+             vec3f(1.0, 0.95, 0.85), saturate(t * 2.0 - 1.0));
+}
 `;
+// The engine lights (8 floats each), heat (4), camera (4), and viewProjection (16).
+const SHIP_EFFECTS_FLOATS = ENGINE_LIGHT_COUNT * 8 + 24;
 
 const GLOW_SHADER = /* wgsl */ `
-${ENGINE_LIGHT_WGSL}
+${SHIP_EFFECTS_WGSL}
 const GLOW_RADIUS: f32 = ${GLOW_RADIUS}.0;
 const GLOW_PULL: f32 = ${GLOW_PULL}.0;
 const GLOW_BRIGHTNESS: f32 = ${GLOW_BRIGHTNESS};
@@ -89,7 +144,7 @@ fn vs_glow(@builtin(vertex_index) vertex: u32, @builtin(instance_index) index: u
     vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
   );
   let corner = corners[vertex];
-  let light = engineLights[index];
+  let light = effects.lights[index];
   let toCamera = normalize(glow.cameraPosition.xyz - light.position.xyz);
   let center = light.position.xyz + toCamera * GLOW_PULL;
   let world = center + (glow.cameraRight.xyz * corner.x + glow.cameraUp.xyz * corner.y) * GLOW_RADIUS;
@@ -136,7 +191,8 @@ const MAX_MORPH_TARGETS = 2;
 
 const SHADER = /* wgsl */ `
 ${LIGHT_WGSL}
-${ENGINE_LIGHT_WGSL}
+${NOISE_WGSL}
+${SHIP_EFFECTS_WGSL}
 const FLAME_BRIGHTNESS: f32 = ${FLAME_BRIGHTNESS};
 const ENGINE_LIGHT_REFERENCE: f32 = ${ENGINE_LIGHT_REFERENCE}.0;
 const ENGINE_LIGHT_RANGE: f32 = ${ENGINE_LIGHT_RANGE}.0;
@@ -160,12 +216,12 @@ struct LitOutput {
 fn engineLighting(worldPosition: vec3f, normal: vec3f) -> vec3f {
   var sum = vec3f(0.0);
   for (var i = 0u; i < ENGINE_LIGHT_COUNT; i++) {
-    let toLight = engineLights[i].position.xyz - worldPosition;
+    let toLight = effects.lights[i].position.xyz - worldPosition;
     let dist = length(toLight);
     let diffuse = max(dot(normal, toLight / dist), 0.0);
     let falloff = 1.0 / (1.0 + (dist * dist) / (ENGINE_LIGHT_REFERENCE * ENGINE_LIGHT_REFERENCE));
     let window = saturate(1.0 - pow(dist / ENGINE_LIGHT_RANGE, 4.0));
-    sum += engineLights[i].color.rgb * diffuse * falloff * window * window;
+    sum += effects.lights[i].color.rgb * diffuse * falloff * window * window;
   }
   return sum;
 }
@@ -185,7 +241,114 @@ fn vs_lit(@location(0) position: vec3f, @location(1) normal: vec3f) -> LitOutput
 fn fs_lit(input: LitOutput) -> @location(0) vec4f {
   let normal = normalize(input.worldNormal);
   let engineLight = draw.baseColor.rgb * engineLighting(input.worldPosition, normal);
-  return vec4f(applyLight(draw.baseColor.rgb, normal) + engineLight, draw.baseColor.a);
+  // Re-entry heating: the surfaces that face forward glow.
+  let facing = saturate(dot(normal, effects.heat.xyz));
+  let glow = effects.heat.w * pow(facing, 1.5) * 1.6;
+  let heat = heatColor(glow) * glow;
+  // The fire around the ship lights it. The light wraps around the ship, and it is strongest on the
+  // surfaces that face back into the flame.
+  let time = effects.camera.w;
+  let flicker = 0.8 + 0.2 * sin(time * 23.0) * sin(time * 37.0 + 1.3);
+  let wrap = 0.35 + 0.65 * saturate(dot(normal, -effects.heat.xyz) * 0.5 + 0.5);
+  let fireColor = vec3f(${FIRE_LIGHT.join(', ')}) * ${FIRE_LIGHT_STRENGTH};
+  let fire = draw.baseColor.rgb * fireColor * effects.heat.w * flicker * wrap;
+  return vec4f(applyLight(draw.baseColor.rgb, normal) + engineLight + heat + fire, draw.baseColor.a);
+}
+
+struct HeatOutput {
+  @builtin(position) position: vec4f,
+  @location(0) worldNormal: vec3f,
+  @location(1) worldPosition: vec3f,
+  @location(2) front: f32,
+}
+
+// The heat shell: the hull moved out along its normals, more at the front. The back of the shell
+// is stretched back, as the hot gas flows past the ship.
+@vertex
+fn vs_heat(@location(0) position: vec3f, @location(1) normal: vec3f) -> HeatOutput {
+  let worldNormal = normalize((draw.model * vec4f(normal, 0.0)).xyz);
+  let forward = effects.heat.xyz;
+  let front = saturate(dot(worldNormal, forward));
+  let back = saturate(-dot(worldNormal, forward));
+  let world = (draw.model * vec4f(position, 1.0)).xyz + worldNormal * (${HEAT_SHELL} + ${HEAT_SHELL_FRONT}.0 * front)
+    - forward * ${HEAT_TRAIL}.0 * back;
+  var output: HeatOutput;
+  output.position = effects.viewProjection * vec4f(world, 1.0);
+  output.worldNormal = worldNormal;
+  output.worldPosition = world;
+  output.front = front;
+  return output;
+}
+
+// The back faces of the shell face away from the camera. Where they face directly away, the shell
+// is behind the hull or near it, and the glow is bright. At the outer edge of the shell, the view is
+// along its surface, and the glow is 0, so the edge is soft. The front of the shell is brightest.
+@fragment
+fn fs_heat(input: HeatOutput) -> @location(0) vec4f {
+  let toCamera = normalize(effects.camera.xyz - input.worldPosition);
+  let facing = abs(dot(normalize(input.worldNormal), toCamera));
+  let level = effects.heat.w * pow(facing, 2.5) * (0.15 + 0.85 * input.front);
+  return vec4f(heatColor(level * 1.4) * level * ${HEAT_SHELL_BRIGHTNESS}, 0.0);
+}
+
+struct StreakOutput {
+  @builtin(position) position: vec4f,
+  // 0 at the hull and 1 at the end of the streak.
+  @location(0) along: f32,
+  // -1 to 1 across the streak.
+  @location(1) across: f32,
+  @location(2) @interpolate(flat) seed: f32,
+  @location(3) @interpolate(flat) speed: f32,
+  // The brightness of the streak, from its start point: 1 at the outline of the hull.
+  @location(4) @interpolate(flat) weight: f32,
+}
+
+// Six vertices for each streak instance: two triangles of the ribbon. The model matrix of the hull
+// moves the start point with the ship.
+@vertex
+fn vs_streak(@builtin(vertex_index) vertex: u32, @location(0) localPosition: vec3f,
+             @location(1) localNormal: vec3f, @location(2) params: vec4f) -> StreakOutput {
+  var corners = array<vec2f, 6>(
+    vec2f(0.0, -1.0), vec2f(1.0, -1.0), vec2f(0.0, 1.0),
+    vec2f(0.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+  );
+  let corner = corners[vertex];
+  let normal = normalize((draw.model * vec4f(localNormal, 0.0)).xyz);
+  let back = -effects.heat.xyz;
+  let heat = effects.heat.w;
+  let streakLength = params.x * (0.5 + 0.5 * heat);
+  // The streak starts a little out from the hull, goes back, and also moves out from the hull, as
+  // the gas flows around the ship.
+  let start = (draw.model * vec4f(localPosition, 1.0)).xyz + normal * 0.5;
+  var point = start + back * streakLength * corner.x + normal * streakLength * corner.x * 0.15;
+  let toCamera = normalize(effects.camera.xyz - point);
+  let side = normalize(cross(back, toCamera));
+  let outline = 1.0 - abs(dot(normal, normalize(effects.camera.xyz - start)));
+  point += side * params.y * (1.0 + corner.x * 2.0) * corner.y;
+  var output: StreakOutput;
+  output.position = effects.viewProjection * vec4f(point, 1.0);
+  output.along = corner.x;
+  output.across = corner.y;
+  output.seed = params.z;
+  output.speed = params.w;
+  // Each streak shows only at random times, from noise over time.
+  let shown = saturate((perlin3(vec3f(effects.camera.w * 0.5, params.z, 0.5), 901u) + 0.05) * 4.0);
+  output.weight = mix(${STREAK_BODY_BRIGHTNESS}, 1.0, outline * outline) * shown;
+  return output;
+}
+
+@fragment
+fn fs_streak(input: StreakOutput) -> @location(0) vec4f {
+  let time = effects.camera.w;
+  let flow = perlin3(vec3f(input.along * 7.0 - time * input.speed, input.across * 1.2, input.seed), 900u);
+  let edge = 1.0 - input.across * input.across;
+  let fade = pow(1.0 - input.along, 1.4) * smoothstep(0.0, 0.04, input.along);
+  let level = effects.heat.w * input.weight * edge * fade * saturate(0.55 + flow) * ${STREAK_BRIGHTNESS};
+  let hot = vec3f(1.0, 0.88, 0.95);
+  let middle = vec3f(1.0, 0.45, 0.3);
+  let cool = vec3f(0.55, 0.35, 1.0);
+  let color = mix(mix(hot, middle, saturate(input.along * 2.5)), cool, saturate(input.along * 1.6 - 0.4));
+  return vec4f(color * level, 0.0);
 }
 
 struct UnlitOutput {
@@ -281,8 +444,16 @@ export class Ship {
   private readonly glowUniformBuffer: Buffer;
   private readonly glowBindGroup: BindGroup;
   private readonly glowPipeline: RenderPipeline;
+  private readonly heatPipeline: RenderPipeline;
+  private readonly streakPipeline: RenderPipeline;
+  private readonly streakBuffer: Buffer;
+  // The draw of the hull. The streaks use its bind group, for the model matrix of the hull.
+  private hullItem: DrawItem | null = null;
+  // From 0 (no heating) to 1 (full re-entry heating).
+  private heat = 0;
+  private cameraPosition: Vec3 = [0, 0, 0];
   // Two vec4f for each engine light: position and color.
-  private readonly engineLightData = new Float32Array(ENGINE_LIGHT_COUNT * 8);
+  private readonly engineLightData = new Float32Array(SHIP_EFFECTS_FLOATS);
   // The time in seconds since the ship was made. The flicker uses it.
   private clock = 0;
   // True when the boost is on. The boost level moves toward 1 when it is on, and toward 0 when it
@@ -347,7 +518,8 @@ export class Ship {
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: 'uniform' },
         },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        // The heat shell reads the effects in its vertex shader.
+        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
       ],
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [drawLayout, light.bindGroupLayout] });
@@ -401,6 +573,64 @@ export class Ship {
         ],
       },
       primitive: { topology: 'triangle-list' },
+      depthStencil: { format: depthFormat, depthWriteEnabled: false, depthCompare: 'less' },
+    });
+
+    // The heat shell adds light, and it does not write depth. It culls front faces, so that only
+    // its back faces draw, and the ship hides them except at its outline.
+    // The plasma streaks are instances: one start point and its parameters for each streak.
+    this.streakBuffer = createBuffer(device, this.makeStreaks(model), GPUBufferUsage.VERTEX);
+    this.streakPipeline = device.createRenderPipeline({
+      layout: pipelineLayout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vs_streak',
+        buffers: [
+          {
+            arrayStride: STREAK_FLOATS * Float32Array.BYTES_PER_ELEMENT,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x3' },
+              { shaderLocation: 1, offset: 12, format: 'float32x3' },
+              { shaderLocation: 2, offset: 24, format: 'float32x4' },
+            ],
+          },
+        ],
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_streak',
+        targets: [
+          {
+            format,
+            blend: {
+              color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+              alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+            },
+          },
+        ],
+      },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: { format: depthFormat, depthWriteEnabled: false, depthCompare: 'less' },
+    });
+
+    this.heatPipeline = device.createRenderPipeline({
+      layout: pipelineLayout,
+      vertex: { module: shaderModule, entryPoint: 'vs_heat', buffers: litBuffers },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fs_heat',
+        targets: [
+          {
+            format,
+            blend: {
+              color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+              alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+            },
+          },
+        ],
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'front' },
       depthStencil: { format: depthFormat, depthWriteEnabled: false, depthCompare: 'less' },
     });
 
@@ -497,6 +727,9 @@ export class Ship {
           }),
         };
         (primitive.material.blend ? this.blendedItems : this.opaqueItems).push(item);
+        if (node.name === HULL_NODE && !this.hullItem) {
+          this.hullItem = item;
+        }
       }
     });
 
@@ -546,6 +779,12 @@ export class Ship {
     glowData.set([view[0], view[4], view[8], 0], 20);
     glowData.set([view[1], view[5], view[9], 0], 24);
     this.device.queue.writeBuffer(this.glowUniformBuffer, 0, glowData);
+    this.cameraPosition = [cameraPosition[0], cameraPosition[1], cameraPosition[2]];
+  }
+
+  // Set the re-entry heating level, from 0 (none) to 1 (full).
+  setHeat(level: number): void {
+    this.heat = Math.max(0, Math.min(1, level));
   }
 
   // Ignite the engines, or shut them down. A change in the middle of an ignition or a shutdown
@@ -574,6 +813,15 @@ export class Ship {
   // Turn the engine boost on or off. The boost level changes smoothly.
   setBoost(on: boolean): void {
     this.boostOn = on;
+  }
+
+  // Set the engines on or off at once, with no ignition or shutdown animation. A running engine
+  // starts at full flame size.
+  resetEngines(on: boolean): void {
+    this.engineState = on ? 'running' : 'off';
+    this.igniteTime = this.ignite.duration;
+    this.runningTime = 0;
+    this.updatePose();
   }
 
   // Advance the animations by a time step in seconds.
@@ -622,6 +870,29 @@ export class Ship {
       pass.drawIndexed(indexCount);
     }
 
+    // The heat shell of each solid part. The uniforms of these parts are already set.
+    if (this.heat > 0.001) {
+      pass.setPipeline(this.heatPipeline);
+      for (const item of this.opaqueItems) {
+        if (item.primitive.material.unlit) {
+          continue;
+        }
+        const { vertexBuffers, indexBuffer, indexFormat, indexCount } = item.gpuPrimitive;
+        pass.setBindGroup(0, item.bindGroup);
+        vertexBuffers.forEach((buffer, slot) => pass.setVertexBuffer(slot, buffer));
+        pass.setIndexBuffer(indexBuffer, indexFormat);
+        pass.drawIndexed(indexCount);
+      }
+    }
+
+    // The plasma streaks of the re-entry.
+    if (this.heat > 0.001 && this.hullItem) {
+      pass.setPipeline(this.streakPipeline);
+      pass.setBindGroup(0, this.hullItem.bindGroup);
+      pass.setVertexBuffer(0, this.streakBuffer);
+      pass.draw(6, STREAK_COUNT);
+    }
+
     // The glow sprites go last, so that the depth test hides them behind all ship surfaces.
     // When the engines are off, the light color is 0, so the sprites add nothing.
     if (this.engineState !== 'off') {
@@ -632,6 +903,7 @@ export class Ship {
   }
 
   // Put each engine light behind its nozzle, and set its color from the flame size and the flicker.
+  // Also write the heat, the ship front direction, and the camera.
   private writeEngineLights(): void {
     const [rateA, rateB] = ENGINE_LIGHT_FLICKER_RATES;
     this.engines.forEach(({ flameRoot, engine }, i) => {
@@ -650,6 +922,13 @@ export class Ship {
         i * 8 + 4,
       );
     });
+    // The ship front is +Z of the model, rotated by the placement.
+    const forward = [this.placement[8], this.placement[9], this.placement[10]];
+    const length = Math.hypot(forward[0], forward[1], forward[2]);
+    const lightFloats = ENGINE_LIGHT_COUNT * 8;
+    this.engineLightData.set([forward[0] / length, forward[1] / length, forward[2] / length, this.heat], lightFloats);
+    this.engineLightData.set([...this.cameraPosition, this.clock], lightFloats + 4);
+    this.engineLightData.set(this.viewProjection, lightFloats + 8);
     this.device.queue.writeBuffer(this.engineLightBuffer, 0, this.engineLightData);
   }
 
@@ -691,6 +970,73 @@ export class Ship {
   // The brightness of the flames, the engine lights, and the glow, as a fraction of full brightness.
   private boostBrightness(): number {
     return BOOST_BASE_LEVEL + (1 - BOOST_BASE_LEVEL) * this.boost;
+  }
+
+  // The instance data of the plasma streaks: random points on the front of the hull, where the
+  // normal points forward (+Z in the model). A fixed seed gives the same streaks in each run.
+  // The instance data of the plasma streaks: random points on the solid parts of the ship, where the
+  // normal points forward (+Z in the model) or to the side. The points are in the space of the hull
+  // node, because the streaks use the model matrix of the hull. A fixed seed gives the same streaks
+  // in each run.
+  private makeStreaks(model: GltfModel): Float32Array {
+    const hullIndex = model.nodes.findIndex((node) => node.name === HULL_NODE);
+    if (hullIndex < 0 || !model.nodes[hullIndex].mesh) {
+      throw new Error(`The ship model has no mesh in the node ${HULL_NODE}`);
+    }
+    // The rest transform of each node from the root of the scene. The hull is at the root space.
+    const parents = new Map<number, number>();
+    model.nodes.forEach((node, index) => node.children.forEach((child) => parents.set(child, index)));
+    const restMatrix = (index: number): Mat4 => {
+      const node = model.nodes[index];
+      const local = compose(node.translation, node.rotation, node.scale);
+      const parent = parents.get(index);
+      return parent === undefined ? local : multiply(restMatrix(parent), local);
+    };
+    const hullInverse = invert(restMatrix(hullIndex));
+    const toHull = (index: number): Mat4 => multiply(hullInverse, restMatrix(index));
+    // The candidate points: position and normal in the hull space.
+    const points: { position: Vec3; normal: Vec3 }[] = [];
+    model.nodes.forEach((node, index) => {
+      for (const primitive of node.mesh?.primitives ?? []) {
+        if (primitive.material.unlit) {
+          continue;
+        }
+        const matrix = toHull(index);
+        for (let i = 0; i < primitive.positions.length / 3; ++i) {
+          const normal: Vec3 = [primitive.normals[i * 3], primitive.normals[i * 3 + 1], primitive.normals[i * 3 + 2]];
+          // The parts have no rotation, so the normal does not change.
+          if (normal[2] > STREAK_FRONT) {
+            const position = transformPoint(matrix, [
+              primitive.positions[i * 3],
+              primitive.positions[i * 3 + 1],
+              primitive.positions[i * 3 + 2],
+            ]);
+            points.push({ position, normal });
+          }
+        }
+      }
+    });
+    // A small random number generator (mulberry32).
+    let state = STREAK_SEED;
+    const random = () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let x = state;
+      x = Math.imul(x ^ (x >>> 15), x | 1);
+      x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+    const between = (range: readonly [number, number]) => range[0] + (range[1] - range[0]) * random();
+    const data = new Float32Array(STREAK_COUNT * STREAK_FLOATS);
+    for (let streak = 0; streak < STREAK_COUNT; ++streak) {
+      const point = points[Math.floor(random() * points.length)];
+      data.set(point.position, streak * STREAK_FLOATS);
+      data.set(point.normal, streak * STREAK_FLOATS + 3);
+      data.set(
+        [between(STREAK_LENGTH), between(STREAK_WIDTH), random() * 100, between(STREAK_SPEED)],
+        streak * STREAK_FLOATS + 6,
+      );
+    }
+    return data;
   }
 
   // Start from the rest pose of each node, then apply the active animations.

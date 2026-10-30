@@ -1,5 +1,6 @@
 // The browser target: show the scene (src/app.ts) in a canvas with the browser WebGPU API.
-// Press W to toggle between the solid and the wireframe terrain.
+// Press W to toggle between the solid and the wireframe terrain, and N to go to the next scene.
+// To start at a scene, give its number (from 1) in the URL: ?scene=2
 
 import { App } from './app.js';
 import { parseGlb } from './gltf.js';
@@ -28,7 +29,10 @@ async function main(): Promise<void> {
   if (!adapter) {
     throw new Error('No WebGPU adapter is available');
   }
-  const device = await adapter.requestDevice();
+  // The benchmark measures the GPU time of each frame when the adapter can write timestamps.
+  const device = await adapter.requestDevice({
+    requiredFeatures: adapter.features.has('timestamp-query') ? ['timestamp-query'] : [],
+  });
   device.addEventListener('uncapturederror', (event) => {
     console.error('WebGPU error:', (event as GPUUncapturedErrorEvent).error.message);
   });
@@ -46,6 +50,8 @@ async function main(): Promise<void> {
     throw new Error(`Cannot load ${SHIP_MODEL_URL}: ${response.status} ${response.statusText}`);
   }
   const app = new App(device, format, parseGlb(await response.arrayBuffer()));
+  const sceneNumber = Number(new URLSearchParams(location.search).get('scene') ?? '1');
+  app.jumpToScene(Number.isFinite(sceneNumber) && sceneNumber >= 1 ? sceneNumber : 1);
 
   // The canvas fills the window. Its size in pixels is its CSS size times the device pixel ratio,
   // so the image is sharp on high-density displays.
@@ -62,6 +68,8 @@ async function main(): Promise<void> {
     }
     if (event.key === 'w' || event.key === 'W') {
       app.toggleTerrainRenderMode();
+    } else if (event.key === 'n' || event.key === 'N') {
+      app.nextScene();
     }
   });
 
