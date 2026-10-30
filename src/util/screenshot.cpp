@@ -38,12 +38,12 @@ void Screenshot::Capture(const wgpu::Device& device, const wgpu::Texture& textur
     const wgpu::CommandBuffer commands = encoder.Finish();
     device.GetQueue().Submit(1, &commands);
 
-    state_->pending = true;
+    state_->pending += 1;
     buffer.MapAsync(
         wgpu::MapMode::Read, 0, buffer.GetSize(), wgpu::CallbackMode::AllowProcessEvents,
         [state = state_, buffer, path, width, height, bytesPerRow, bgra](
             wgpu::MapAsyncStatus status, wgpu::StringView) {
-            state->pending = false;
+            state->pending -= 1;
             if (status != wgpu::MapAsyncStatus::Success) {
                 std::fprintf(stderr, "Screenshot: cannot read the texture\n");
                 return;

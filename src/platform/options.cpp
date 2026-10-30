@@ -1,5 +1,6 @@
 #include "platform/options.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdlib>
 #include <string_view>
@@ -43,7 +44,16 @@ bool ParseOptions(const std::vector<std::string>& arguments, Options& options, s
         } else if (name == "--frames") {
             valid = ParseNumber(value, options.frames);
         } else if (name == "--screenshot") {
-            valid = ParseNumber(value, options.screenshotFrame) && options.screenshotFrame >= 1;
+            // A list of frame numbers, for example 120,240,360.
+            options.screenshotFrames.clear();
+            size_t start = 0;
+            while (valid && start <= value.size()) {
+                const size_t comma = std::min(value.find(',', start), value.size());
+                uint64_t frame = 0;
+                valid = ParseNumber(value.substr(start, comma - start), frame) && frame >= 1;
+                options.screenshotFrames.push_back(frame);
+                start = comma + 1;
+            }
         } else if (name == "--exit-on-finish") {
             valid = value.empty();
             options.exitOnFinish = true;

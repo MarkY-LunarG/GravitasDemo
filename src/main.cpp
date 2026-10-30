@@ -112,7 +112,8 @@ class Program {
         }
         app_->Frame(animationSeconds, realSeconds, view, size.width, size.height);
         ++frameCount_;
-        if (frameCount_ == options_.screenshotFrame) {
+        if (std::find(options_.screenshotFrames.begin(), options_.screenshotFrames.end(),
+                      frameCount_) != options_.screenshotFrames.end()) {
             screenshot_.Capture(gpu_->Device(), platform_->CurrentTexture(),
                                 "screenshot_" + std::to_string(frameCount_) + ".png");
         }
@@ -121,14 +122,14 @@ class Program {
         if (app_->ExitRequested() || (options_.exitOnFinish && app_->Finished())) {
             return false;
         }
-        // Continue until the screenshot is written, also after the last frame.
+        // Continue until the screenshots are written, also after the last frame.
         return options_.frames == 0 || frameCount_ < options_.frames || screenshot_.Pending();
     }
 
   private:
     bool StartApp() {
         if (!platform_->ConfigureSurface(gpu_->Adapter(), gpu_->Device(),
-                                         options_.screenshotFrame > 0)) {
+                                         !options_.screenshotFrames.empty())) {
             return false;
         }
         std::string error;

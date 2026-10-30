@@ -121,7 +121,7 @@ build/release/hackathon [options]
 | `--fixed-step=<s>` | `?fixedStep=<s>` | Advance the animation by `s` seconds in each frame.       |
 | `--frames=<n>`     | `?frames=<n>`    | Stop after `n` frames.                                    |
 | `--exit-on-finish` | `?exitOnFinish`  | Stop after the last scene, when its result is written.    |
-| `--screenshot=<n>` |                  | Desktop: write frame `n` (from 1) to `screenshot_<n>.png`. |
+| `--screenshot=<n>` |                  | Desktop: write frame `n` (from 1) to `screenshot_<n>.png`. A list, for example `120,240`, writes each frame. |
 
 In the browser, give the options in the URL, for example `index.html?frames=120&fixedStep=0.016667`.
 An unknown or incorrect option stops the run, and the page shows the error.
@@ -187,6 +187,28 @@ The replay plays all of the frames with no other error.
 
 The port has six milestones: the skeleton, the core objects and the terrain scene, scenes 2 to 4,
 the intro and the results page, parity with the TypeScript version, and the removal of `ts/`.
+
+Milestone 5 (parity) is verified on the same Linux system, with `scripts/parity/run_parity.py`
+(see `scripts/parity/README.md`):
+
+- Images: 65 frames are the same as the TypeScript frames, pixel for pixel, at 2560 x 1508.
+  They are a frame every 2 seconds of the intro and of each benchmark scene, and four frames of one
+  run from the start to the city scene (frames 2600, 4000, 5400, and 6300).
+- Frame rate: one real-time run of each version, in the same 2880 x 1620 window, with the C++
+  release build:
+
+  | Scene              | TypeScript fps | C++ fps | TypeScript GPU ms | C++ GPU ms |
+  | ------------------ | -------------- | ------- | ----------------- | ---------- |
+  | Terrain and ship   | 90.7           | 89.9    | 8.39              | 8.33       |
+  | Asteroids and ship | 216.2          | 217.2   | 3.50              | 3.50       |
+  | Atmospheric entry  | 129.9          | 158.2   | 5.09              | 5.16       |
+  | City flyover       | 112.1          | 130.7   | 6.33              | 6.34       |
+
+  The GPU times are almost the same, so the two versions give the GPU the same work.
+  The C++ version has a higher frame rate in the two scenes with the most CPU work in each frame:
+  the sort of the clouds and the smoke, and the selection of the mirror walls.
+  This is one run of each version, so small differences are not significant.
+- Not compared: the browser targets.
 
 Milestone 4 (the intro and the results page) is verified on the same Linux system:
 
@@ -295,3 +317,4 @@ Not verified yet:
 | `.clang-format`               | The C++ format of `src/`.                                    |
 | `assets/`                     | The ship model and the intro images, for both versions.      |
 | `scripts/check_desktop_link.py` | The check that Premium-GFXR can capture the desktop target. |
+| `scripts/parity/`             | The parity check with the TypeScript version (removed with `ts/`). |
